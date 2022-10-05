@@ -109,7 +109,7 @@ def main():
 
     #task = args.task
     task='2'
-    fold='3'
+    fold='0'
 
     #fold = args.fold
     #network = args.network
