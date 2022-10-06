@@ -24,6 +24,7 @@ from einops.layers.torch import Rearrange, Reduce
 import math
 import warnings
 from torch.nn.modules.utils import _pair as to_2tuple
+
 #from mmseg.models.builder import BACKBONES
 
 #from mmcv.cnn import build_norm_layer
@@ -89,16 +90,16 @@ class AttentionModule(nn.Module):
     def __init__(self, dim):
         super().__init__()
         self.conv0 = nn.Conv3d(dim, dim, 5, padding=2, groups=dim)
-        self.conv0_1 = nn.Conv3d(dim, dim, (1,1, 7), padding=(0,0, 3), groups=dim)
-        self.conv0_2 = nn.Conv3d(dim, dim, (7, 1,1), padding=(3,0, 0), groups=dim)
+        self.conv0_1 = nn.Conv3d(dim, dim, (1, 7,9 ), padding=(0,3,4), groups=dim)
+        self.conv0_2 = nn.Conv3d(dim, dim, (7, 1,9), padding=(3,0,4), groups=dim)
 
-        self.conv1_1 = nn.Conv3d(dim, dim, (1,1, 11), padding=(0,0, 5), groups=dim)
-        self.conv1_2 = nn.Conv3d(dim, dim, (11,1, 1), padding=(5, 0,0), groups=dim)
+        self.conv1_1 = nn.Conv3d(dim, dim, (1,13, 9), padding= (0,6 ,4), groups=dim)
+        self.conv1_2 = nn.Conv3d(dim, dim, (13,1, 9), padding=(6,0,4), groups=dim)
 
         self.conv2_1 = nn.Conv3d(
-            dim, dim, (1, 1,21), padding=(0, 0,10), groups=dim)
+            dim, dim, (1, 21, 9), padding=(0, 10,4), groups=dim)
         self.conv2_2 = nn.Conv3d(
-            dim, dim, (21, 1,1), padding=(10, 0,0), groups=dim)
+            dim, dim, (21, 1,9), padding=(10, 0,4), groups=dim)
         self.conv3 = nn.Conv3d(dim, dim, 1)
 
     def forward(self, x):
@@ -462,15 +463,26 @@ class SwinTransformerBlock(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = FFN(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
         self.layer_scale_1 = nn.Parameter(layer_scale_init_value * torch.ones((dim)), requires_grad=True)
+    
+        self.layer_scale_2 = nn.Parameter(layer_scale_init_value * torch.ones((dim)), requires_grad=True)
        
     def forward(self, x):
-
         B, L, C = x.shape
         S, H, W = self.input_resolution
    
         assert L == S * H * W, "input feature has wrong size"
+        # x = x.permute(0, 2, 1).view(B, C, H, W,S)
+        # x = x + self.drop_path(self.layer_scale_1.unsqueeze(-1).unsqueeze(-1)
+        #                        * self.attn(self.norm1(x)))
+        # x = x + self.drop_path(self.layer_scale_2.unsqueeze(-1).unsqueeze(-1)
+        #                        * self.mlp(self.norm2(x)))
+        # x = x.view(B, C, L).permute(0, 2, 1)
+
+       
+   
+        # assert L == S * H * W, "input feature has wrong size"
         
         shortcut = x
         x = self.norm1(x)
@@ -478,17 +490,18 @@ class SwinTransformerBlock(nn.Module):
 
         
         x=self.attn(x)
+        x=self.layer_scale_1.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * x
 
         x = x.view(B, S * H * W, C)
         
 
-        # FFN
+        # # FFN
         x = shortcut + self.drop_path(x)
         x=self.norm2(x)
-        x = x.view(B, C, S, H, W)
+        # x = x.view(B, C, S, H, W)
         
         x=self.mlp(x)
-        x = x.view(B, S * H * W, C)
+        # x = x.view(B, S * H * W, C)
         x = x + self.drop_path(x)
         
 
