@@ -25,168 +25,39 @@ def conv(in_channels, out_channels, kernel_size, bias=False, padding = 1, stride
     return nn.Conv2d(
         in_channels, out_channels, kernel_size,
         padding=(kernel_size//2), bias=bias, stride = stride)
-class SKFF(nn.Module):
-    def __init__(self, in_channels=1, height=4, reduction=8, bias=False):
-        super(SKFF, self).__init__()
-        self.in_channels= in_channels
-        self.height = height
 
-        d = max(int(in_channels / reduction), 4)
-
-        self.avg_pool = nn.AdaptiveAvgPool3d(1)
-        self.conv_du = nn.Sequential(nn.Conv3d(in_channels, d, 1, padding=0, bias=bias), nn.GELU())
-
-        self.fcs = nn.ModuleList([])
-        for i in range(self.height):
-            if i < 2:
-                kernel_sz = 1
-                pad = 0
-            elif i == 2:
-                kernel_sz = 3
-                pad = 1
-            else:
-                kernel_sz = 5
-                pad = 2
-            self.fcs.append(nn.Conv3d(d, in_channels, kernel_size=kernel_sz, padding=pad, stride=1, bias=bias))
-
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, inp_feats):
-        batch_size = inp_feats[0].shape[0]
-        n_feats = inp_feats[0].shape[1]
-
-        inp_feats = torch.cat(inp_feats, dim=1)
-        #print("skff shape", inp_feats.shape)
-        inp_feats = inp_feats.view(batch_size, self.height, n_feats, inp_feats.shape[2], inp_feats.shape[3], inp_feats.shape[4])
-        #print("inp_feats shape", inp_feats.shape)
-        feats_U = torch.sum(inp_feats, dim=1)
-        feats_S = self.avg_pool(feats_U)
-        feats_Z = self.conv_du(feats_S)
-
-        attention_vectors = [fc(feats_Z) for fc in self.fcs]
-        attention_vectors = torch.cat(attention_vectors, dim=1)
-        attention_vectors = attention_vectors.view(batch_size, self.height, n_feats, 1, 1,1)
-        # stx()
-        attention_vectors = self.softmax(attention_vectors)
-        #print("inp_feats shape", inp_feats.shape)
-        #print("attention_vectors shape", attention_vectors.shape)
-        feats_V = torch.sum(inp_feats * attention_vectors, dim=1)
-
-        return feats_V
-class PreNormResidual(nn.Module):
-    def __init__(self, dim, fn):
-        super().__init__()
-        self.norm = nn.LayerNorm(dim)
-        self.fn = fn
+class DWConv(nn.Module):
+    def __init__(self, dim):
+        super(DWConv, self).__init__()
+        self.dwconv = nn.Conv3d(dim, dim, 3, 1, 1, bias=True, groups=dim)
 
     def forward(self, x):
-        return self.fn(self.norm(x)) + x
+        x = self.dwconv(x)
+        return x        
 
-
-class FeedForward(nn.Module):
-
-    def __init__(self, dim, mult=4, dropout=0.):
+class Mlp_seg(nn.Module):
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()
-        inner_dim = int(dim * mult)
-        self.net = nn.Sequential(
-            nn.Linear(dim, inner_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout)
-        )
-
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Conv3d(in_features, hidden_features, 1)
+        #self.dwconv = DWConv(hidden_features)
+        self.act = act_layer()
+        self.fc2 = nn.Conv3d(hidden_features, out_features, 1)
+        self.drop = nn.Dropout(drop) 
+    
     def forward(self, x):
-        return self.net(x)
+        x = self.fc1(x)
 
+        #x = self.dwconv(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        x = self.drop(x)
 
-# attention related classes
-
-class Attention(nn.Module):
-    def __init__(self, dim, dim_head=32, dropout=0., window_size=7):
-        super().__init__()
-        assert (dim % dim_head) == 0, 'dimension should be divisible by dimension per head'
-
-        self.heads = dim // dim_head
-        self.scale = dim_head ** -0.5
-
-        self.to_qkv = nn.Linear(dim, dim * 3, bias=False)
-
-        self.attend = nn.Sequential(
-            nn.Softmax(dim=-1),
-            nn.Dropout(dropout)
-        )
-
-        self.to_out = nn.Sequential(
-            nn.Linear(dim, dim, bias=False),
-            nn.Dropout(dropout)
-        )
-
-        # relative positional bias
-
-        self.rel_pos_bias = nn.Embedding((2 * window_size - 1) ** 2, self.heads)
-
-        pos = torch.arange(window_size)
-        grid = torch.stack(torch.meshgrid(pos, pos, indexing='ij'))
-        grid = rearrange(grid, 'c i j -> (i j) c')
-        rel_pos = rearrange(grid, 'i ... -> i 1 ...') - rearrange(grid, 'j ... -> 1 j ...')
-        rel_pos += window_size - 1
-        rel_pos_indices = (rel_pos * torch.tensor([2 * window_size - 1, 1])).sum(dim=-1)
-
-        self.register_buffer('rel_pos_indices', rel_pos_indices, persistent=False)
-
-    def forward(self, x):
-        batch, height, width, window_height, window_width, _, device, h = *x.shape, x.device, self.heads
-
-        # flatten
-        x = rearrange(x, 'b x y w1 w2 d -> (b x y) (w1 w2) d')
-
-        # project for queries, keys, values
-        q, k, v = self.to_qkv(x).chunk(3, dim=-1)
-
-        # split heads
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d ) -> b h n d', h=h), (q, k, v))
-
-        # scale
-        q = q * self.scale
-
-        # sim
-        sim = einsum('b h i d, b h j d -> b h i j', q, k)
-
-        # add positional bias
-        bias = self.rel_pos_bias(self.rel_pos_indices)
-        sim = sim + rearrange(bias, 'i j h -> h i j')
-
-        # attention
-        attn = self.attend(sim)
-
-        # aggregate
-        out = einsum('b h i j, b h j d -> b h i d', attn, v)
-
-        # merge heads
-        out = rearrange(out, 'b h (w1 w2) d -> b w1 w2 (h d)', w1=window_height, w2=window_width)
-
-        # combine heads out
-        out = self.to_out(out)
-
-        return rearrange(out, '(b x y) ... -> b x y ...', x=height, y=width)
-
-
-class Grid_attention_Block(nn.Module):
-    def __init__(self, dim, dim_head=32, attn_dropout=0., grid_dropout=0., window_size=4):
-        super().__init__()
-
-        self.grid_attn = nn.Sequential(
-            Rearrange('b d (w1 x) (w2 y) -> b x y w1 w2 d', w1=window_size, w2=window_size, w3=window_size),  # grid-like attention
-            PreNormResidual(dim, Attention(dim=dim, dim_head=dim_head, dropout=grid_dropout, window_size=window_size)),
-            # PreNormResidual(dim, FeedForward(dim = dim, dropout = grid_dropout)),
-            Rearrange('b x y w1 w2 d -> b d (w1 x) (w2 y)'),
-        )
-
-    def forward(self, x):
-        out = self.grid_attn(x)
-
-        return out
+        return x
+    
+               
 
 
 class ContiguousGrad(torch.autograd.Function):
@@ -263,7 +134,7 @@ class SwinTransformerBlock_kv(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.mlp = Mlp_seg(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
         #self.grid
     def forward(self, x, mask_matrix,skip=None,x_up=None):
     
@@ -325,7 +196,11 @@ class SwinTransformerBlock_kv(nn.Module):
 
         # FFN
         x = shortcut + self.drop_path(x)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        x=self.norm2(x)
+        x= x.view(B,C, S, H, W)
+        x=self.mlp(x)
+        x=x.view((B, S * H * W, C))
+        x = x + self.drop_path(x)
 
         return x
         
@@ -1136,7 +1011,7 @@ class nnFormer(SegmentationNetwork):
         self.conv1 = nn.Conv3d(self.model_down.Encoder_dims[0], self.model_down.Encoder_dims[3], kernel_size=3,stride=1, padding=1)
         self.conv2 = nn.Conv3d(self.model_down.Encoder_dims[1], self.model_down.Encoder_dims[3], kernel_size=3, stride=1, padding=1)
         self.conv3 = nn.Conv3d(self.model_down.Encoder_dims[2], self.model_down.Encoder_dims[3], kernel_size=3, stride=1, padding=1)
-        self.skff = SKFF(in_channels=self.model_down.Encoder_dims[3], height=4, reduction=8, bias=False)
+        #self.skff = SKFF(in_channels=self.model_down.Encoder_dims[3], height=4, reduction=8, bias=False)
 
         self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
 
@@ -1159,38 +1034,17 @@ class nnFormer(SegmentationNetwork):
         seg_outputs=[]
         skips = self.model_down(x)
 
-        skips_0 = skips[0]
-        skips_1 = skips[1]
-        skips_2 = skips[2]
-        skips_3 = skips[3]
-
-        B, C, D, H, W = skips_3.shape
-
-        skips_0 = self.conv1(skips_0)
-
-        skips_1 = self.conv2(skips_1)
-        skips_2 = self.conv3(skips_2)
-
-        down=torch.nn.Upsample(D)
-
-
-        skips_0 = down(skips_0)
-        skips_1 = down(skips_1)
-
-        skips_2 = down(skips_2)
-
-
         #print("3", skips_3.shape)
         #print("skips_0", skips_0.shape)
         #print("skips_1", skips_1.shape)
         #print("skips_2",skips_2.shape)
         #print("skips_3", skips_3.shape)
 
-        tmp_neck = self.skff([skips_0,skips_1,skips_2,skips_3])
+        
         neck=skips[-1]
         #print("tmp_neck shape", tmp_neck.shape)
        
-        out=self.decoder(tmp_neck,skips)
+        out=self.decoder(neck,skips)
         
        
             
