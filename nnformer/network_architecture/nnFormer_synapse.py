@@ -47,10 +47,10 @@ class FFN(nn.Module):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
-        self.fc1 = nn.Conv3d(in_features, hidden_features, 1)
+        self.fc1 = nn.Conv3d(in_features, hidden_features, 3)
         self.dwconv = DWConv(hidden_features)
         self.act = act_layer()
-        self.fc2 = nn.Conv3d(hidden_features, out_features, 1)
+        self.fc2 = nn.Conv3d(hidden_features, out_features, 3,padding=2)
         self.drop = nn.Dropout(drop)
 
     def forward(self, x):
@@ -463,7 +463,7 @@ class SwinTransformerBlock(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.mlp = FFN(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
         self.layer_scale_1 = nn.Parameter(layer_scale_init_value * torch.ones((dim)), requires_grad=True)
     
         self.layer_scale_2 = nn.Parameter(layer_scale_init_value * torch.ones((dim)), requires_grad=True)
@@ -498,10 +498,11 @@ class SwinTransformerBlock(nn.Module):
         # # FFN
         x = shortcut + self.drop_path(x)
         x=self.norm2(x)
-        # x = x.view(B, C, S, H, W)
+        x = x.view(B, C, S, H, W)
         
         x=self.mlp(x)
-        # x = x.view(B, S * H * W, C)
+        x=self.layer_scale_2.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * x
+        x = x.view(B, S * H * W, C)
         x = x + self.drop_path(x)
         
 
