@@ -18,7 +18,7 @@ echo $name
 # then
 	
 # 	cd /home/daniya.kareem/nnFormer/nnformer/
-# 	CUDA_VISIBLE_DEVICES=${cuda} nnFormer_train 3d_fullres nnFormerTrainerV2_${name} ${task} 0
+# 	CUDA_VISIBLE_DEVICES=${cuda} nnFormer_train 3d_fullres nnFormerTrainerV2_${name} ${task} -C
 # fi
 
 
