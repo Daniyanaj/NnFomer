@@ -144,7 +144,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
             self.initialize_network()
             self.initialize_optimizer_and_scheduler()
 
-            assert isinstance(self.network, (SegmentationNetwork, nn.DataParallel))
+            #assert isinstance(self.network, (SegmentationNetwork, nn.DataParallel))
         else:
             self.print_to_log_file('self.was_initialized is True, not running self.initialize again')
         self.was_initialized = True
