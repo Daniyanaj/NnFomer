@@ -270,27 +270,27 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         in_x=[]
         if self.fp16:
             with autocast():
-                output = self.network(data)
-                del data
-                
-                l = self.loss(output, target)
-
-                # in_x.append(data)
-                # in_x.append(target)
-
-                # output, pred_discriminator, target_discriminator = self.network(in_x)
-                # #pred_discriminator = self.network.discriminator(data, output, embeddings,modalities=True)
-                # #target_discriminator = self.network.discriminator(data, target, embeddings,modalities=False)
-               
-                # l_gan = self.gan(pred_discriminator, target_discriminator)
+                # output = self.network(data)
+                # del data
                 
                 # l = self.loss(output, target)
-                # l = l+l_gan
+
+                in_x.append(data)
+                in_x.append(target)
+
+                output, pred_discriminator, target_discriminator = self.network(in_x)
+                #pred_discriminator = self.network.discriminator(data, output, embeddings,modalities=True)
+                #target_discriminator = self.network.discriminator(data, target, embeddings,modalities=False)
+               
+                l_gan = self.gan(pred_discriminator, target_discriminator)
                 
-                # del data
-                # del in_x
                 
                 
+                
+                del data
+                del in_x
+                l = self.loss(output, target)
+                l = l+l_gan
 
             if do_backprop:
                 self.amp_grad_scaler.scale(l).backward()
@@ -299,25 +299,26 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
                 self.amp_grad_scaler.step(self.optimizer)
                 self.amp_grad_scaler.update()
         else:
-            output = self.network(data)
-            del data
-                
-            l = self.loss(output, target)
-
-            # in_x.append(data)
-            # in_x.append(target)
-
-            # output, pred_discriminator, target_discriminator = self.network(in_x)
-            #     #pred_discriminator = self.network.discriminator(data, output, embeddings,modalities=True)
-            #     #target_discriminator = self.network.discriminator(data, target, embeddings,modalities=False)
-               
-            # l_gan = self.gan(pred_discriminator, target_discriminator)
+            # output = self.network(data)
+            # del data
                 
             # l = self.loss(output, target)
-            # l = l+l_gan
+
+            in_x.append(data)
+            in_x.append(target)
+
+            output, pred_discriminator, target_discriminator = self.network(in_x)
+                #pred_discriminator = self.network.discriminator(data, output, embeddings,modalities=True)
+                #target_discriminator = self.network.discriminator(data, target, embeddings,modalities=False)
+               
+            l_gan = self.gan(pred_discriminator, target_discriminator)
                 
-            # del data
-            # del in_x
+            
+                
+            del data
+            del in_x
+            l = self.loss(output, target)
+            l = l+l_gan
 
             if do_backprop:
                 l.backward()

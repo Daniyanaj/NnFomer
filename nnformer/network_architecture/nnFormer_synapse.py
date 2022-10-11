@@ -1546,82 +1546,82 @@ class nnFormer(SegmentationNetwork):
     def forward(self, x_in):
       
             
-        seg_outputs=[]
+        # seg_outputs=[]
         
-        skips = self.model_down(x_in)
-        neck=skips[-1]
+        # skips = self.model_down(x_in)
+        # neck=skips[-1]
        
-        out=self.decoder(neck,skips)
+        # out=self.decoder(neck,skips)
         
        
         
-        # if self.training:
-        #     x = x_in[0]
-        #     target = x_in[1]
-        #     skips = self.model_down(x)
-        #     neck=skips[-1]
-        #     out=self.decoder(neck,skips)
+        if self.training:
+            x = x_in[0]
+            target = x_in[1]
+            skips = self.model_down(x)
+            neck=skips[-1]
+            out=self.decoder(neck,skips)
                 
-        #     #logits, embeddings = self.forward_features_fun(x)
+            #logits, embeddings = self.forward_features_fun(x)
             
                        
-        #     pred_discriminator = self.discriminator(x, out, neck, modalities=True)
-        #     target_discriminator = self.discriminator2(x, target, neck, modalities=False)
-        #     if self.do_ds:
-        #         seg_outputs=[]      
-        #         for i in range(len(out)):  
-        #             seg_outputs.append(self.final[-(i+1)](out[i]))
-        #         a=seg_outputs[::-1]
-        #         return a, pred_discriminator, target_discriminator   
-        #     else:
-        #         seg_outputs.append(self.final[0](out[-1]))
-        #         a=seg_outputs[-1]
+            pred_discriminator = self.discriminator(x, out, neck, modalities=True)
+            target_discriminator = self.discriminator2(x, target, neck, modalities=False)
+            if self.do_ds:
+                seg_outputs=[]      
+                for i in range(len(out)):  
+                    seg_outputs.append(self.final[-(i+1)](out[i]))
+                a=seg_outputs[::-1]
+                return a, pred_discriminator, target_discriminator   
+            else:
+                seg_outputs.append(self.final[0](out[-1]))
+                a=seg_outputs[-1]
                   
-        #         return a, pred_discriminator, target_discriminator
-        #     #return out, pred_discriminator, target_discriminator
+                return a, pred_discriminator, target_discriminator
+            #return out, pred_discriminator, target_discriminator
             
     
-        # else:
-        #     if type(x_in) == list:
-        #         x = x_in[0]
-        #         target =x_in[1]
-        #         skips = self.model_down(x)
-        #         neck=skips[-1]
-        #         out=self.decoder(neck,skips)
+        else:
+            if type(x_in) == list:
+                x = x_in[0]
+                target =x_in[1]
+                skips = self.model_down(x)
+                neck=skips[-1]
+                out=self.decoder(neck,skips)
                 
-        #     #logits, embeddings = self.forward_features_fun(x)
+            #logits, embeddings = self.forward_features_fun(x)
                             
-        #         pred_discriminator = self.discriminator(x, out, neck, modalities=True)
-        #         target_discriminator = self.discriminator2(x, target, neck, modalities=False)
+                pred_discriminator = self.discriminator(x, out, neck, modalities=True)
+                target_discriminator = self.discriminator2(x, target, neck, modalities=False)
 
-        #         if self.do_ds:
-        #             seg_outputs=[]    
-        #             for i in range(len(out)):  
-        #                 seg_outputs.append(self.final[-(i+1)](out[i]))
-        #                 a=seg_outputs[::-1]
-        #                 return a, pred_discriminator, target_discriminator
-        #         else:
-        #             seg_outputs.append(self.final[0](out[-1]))
-        #             a=seg_outputs[-1]
+                if self.do_ds:
+                    seg_outputs=[]    
+                    for i in range(len(out)):  
+                        seg_outputs.append(self.final[-(i+1)](out[i]))
+                        a=seg_outputs[::-1]
+                        return a, pred_discriminator, target_discriminator
+                else:
+                    seg_outputs.append(self.final[0](out[-1]))
+                    a=seg_outputs[-1]
                   
-        #             return a, pred_discriminator, target_discriminator
-            # else:
-            #     x = x_in
-            # #x  = in_x
-            #     skips = self.model_down(x)
-            #     neck=skips[-1]
-            #     out=self.decoder(neck,skips)
-            #     return out
+                    return a, pred_discriminator, target_discriminator
+            else:
+                x = x_in
+            #x  = in_x
+                skips = self.model_down(x)
+                neck=skips[-1]
+                out=self.decoder(neck,skips)
+                return out
          
-        if self.do_ds:
-            for i in range(len(out)):  
-                seg_outputs.append(self.final[-(i+1)](out[i]))
+        # if self.do_ds:
+        #     for i in range(len(out)):  
+        #         seg_outputs.append(self.final[-(i+1)](out[i]))
         
           
-            return seg_outputs[::-1]
-        else:
-            seg_outputs.append(self.final[0](out[-1]))
-            return seg_outputs[-1]
+        #     return seg_outputs[::-1]
+        # else:
+        #     seg_outputs.append(self.final[0](out[-1]))
+        #     return seg_outputs[-1]
             
         
         
