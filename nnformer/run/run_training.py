@@ -112,8 +112,7 @@ def main():
     #fold='0'
 
     fold = args.fold
-    network =
-    args.network
+    network = args.network
     #network="3d_fullres"
     network_trainer = args.network_trainer
     #network_trainer= "nnFormerTrainerV2_nnformer_synapse"
