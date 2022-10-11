@@ -22,7 +22,7 @@ from nnformer.training.cascade_stuff.predict_next_stage import predict_next_stag
 from nnformer.training.network_training.nnFormerTrainer import nnFormerTrainer
 from nnformer.training.network_training.nnFormerTrainer_synapse import nnFormerTrainer_synapse
 
-from nnformer.training.network_training.nnFormerTrainerCascadeFullRes import nnFormerTrainerCascadeFullRes
+#from nnformer.training.network_training.nnFormerTrainerV2_CascadeFullRes import nnFormerTrainerCascadeFullRes
 from nnformer.training.network_training.nnFormerTrainerV2_CascadeFullRes import nnFormerTrainerV2CascadeFullRes
 from nnformer.utilities.task_name_id_conversion import convert_id_to_task_name
 import numpy as np

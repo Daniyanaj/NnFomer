@@ -267,13 +267,30 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
             target = to_cuda(target)
 
         self.optimizer.zero_grad()
-
+        in_x=[]
         if self.fp16:
             with autocast():
                 output = self.network(data)
                 del data
                 
                 l = self.loss(output, target)
+
+                # in_x.append(data)
+                # in_x.append(target)
+
+                # output, pred_discriminator, target_discriminator = self.network(in_x)
+                # #pred_discriminator = self.network.discriminator(data, output, embeddings,modalities=True)
+                # #target_discriminator = self.network.discriminator(data, target, embeddings,modalities=False)
+               
+                # l_gan = self.gan(pred_discriminator, target_discriminator)
+                
+                # l = self.loss(output, target)
+                # l = l+l_gan
+                
+                # del data
+                # del in_x
+                
+                
 
             if do_backprop:
                 self.amp_grad_scaler.scale(l).backward()
@@ -284,7 +301,23 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         else:
             output = self.network(data)
             del data
+                
             l = self.loss(output, target)
+
+            # in_x.append(data)
+            # in_x.append(target)
+
+            # output, pred_discriminator, target_discriminator = self.network(in_x)
+            #     #pred_discriminator = self.network.discriminator(data, output, embeddings,modalities=True)
+            #     #target_discriminator = self.network.discriminator(data, target, embeddings,modalities=False)
+               
+            # l_gan = self.gan(pred_discriminator, target_discriminator)
+                
+            # l = self.loss(output, target)
+            # l = l+l_gan
+                
+            # del data
+            # del in_x
 
             if do_backprop:
                 l.backward()

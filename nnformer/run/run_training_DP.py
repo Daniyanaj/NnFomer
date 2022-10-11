@@ -20,7 +20,7 @@ from nnformer.paths import default_plans_identifier
 from nnformer.run.load_pretrained_weights import load_pretrained_weights
 from nnformer.training.cascade_stuff.predict_next_stage import predict_next_stage
 from nnformer.training.network_training.nnFormerTrainer import nnFormerTrainer
-from nnformer.training.network_training.nnFormerTrainerCascadeFullRes import nnFormerTrainerCascadeFullRes
+from nnformer.training.network_training.nnFormerTrainerV2_CascadeFullRes import nnFormerTrainerCascadeFullRes
 from nnformer.utilities.task_name_id_conversion import convert_id_to_task_name
 
 
