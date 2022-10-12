@@ -451,7 +451,7 @@ class nnFormerTrainer_synapse(NetworkTrainer):
         """
         Use this to predict new data
         :param input_files:
-        :param output_file:
+        :param output_file:val
         :param softmax_ouput_file:
         :param mixed_precision:
         :return:

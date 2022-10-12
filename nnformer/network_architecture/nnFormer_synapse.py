@@ -1561,6 +1561,7 @@ class nnFormer(SegmentationNetwork):
             skips = self.model_down(x)
             neck=skips[-1]
             out=self.decoder(neck,skips)
+            
                 
             #logits, embeddings = self.forward_features_fun(x)
             
@@ -1572,8 +1573,10 @@ class nnFormer(SegmentationNetwork):
                 for i in range(len(out)):  
                     seg_outputs.append(self.final[-(i+1)](out[i]))
                 a=seg_outputs[::-1]
+                
                 return a, pred_discriminator, target_discriminator   
             else:
+                print("exception")
                 seg_outputs.append(self.final[0](out[-1]))
                 a=seg_outputs[-1]
                   
@@ -1583,6 +1586,7 @@ class nnFormer(SegmentationNetwork):
     
         else:
             if type(x_in) == list:
+                print("started validation")
                 x = x_in[0]
                 target =x_in[1]
                 skips = self.model_down(x)
@@ -1598,9 +1602,10 @@ class nnFormer(SegmentationNetwork):
                     seg_outputs=[]    
                     for i in range(len(out)):  
                         seg_outputs.append(self.final[-(i+1)](out[i]))
-                        a=seg_outputs[::-1]
-                        return a, pred_discriminator, target_discriminator
+                    a=seg_outputs[::-1]
+                    return a, pred_discriminator, target_discriminator
                 else:
+                    print("exception")
                     seg_outputs.append(self.final[0](out[-1]))
                     a=seg_outputs[-1]
                   

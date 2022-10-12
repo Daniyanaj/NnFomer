@@ -284,11 +284,13 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
                
                 l_gan = self.gan(pred_discriminator, target_discriminator)
                 
-                
-                
+                 
                 
                 del data
                 del in_x
+                
+                
+
                 l = self.loss(output, target)
                 l = l+l_gan
 
@@ -312,8 +314,6 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
                 #target_discriminator = self.network.discriminator(data, target, embeddings,modalities=False)
                
             l_gan = self.gan(pred_discriminator, target_discriminator)
-                
-            
                 
             del data
             del in_x
