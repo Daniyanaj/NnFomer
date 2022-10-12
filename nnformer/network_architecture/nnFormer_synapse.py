@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 from monai.networks.blocks.dynunet_block import UnetOutBlock
 from monai.networks.blocks import UnetrBasicBlock, UnetrPrUpBlock, UnetrUpBlock
 from monai.networks.blocks.dynunet_block import UnetBasicBlock, UnetResBlock, get_conv_layer
-from vtunet.network_architecture.neural_network import SegmentationNetwork
+#from vtunet.network_architecture.neural_network import SegmentationNetwork
 import torch
 import torch.nn as nn
 
@@ -641,6 +641,114 @@ class SwinTransformerBlock(nn.Module):
         x = x + self.norm2(self.mlp(x))
         return x
 
+class SwinTransformerBlock_2(nn.Module):
+    """
+    A transformer block, based on: "Dosovitskiy et al.,
+    An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale <https://arxiv.org/abs/2010.11929>"
+    """
+
+    def __init__(
+            self,
+            dim,
+            num_heads: int,
+            input_resolution: int,
+            dropout_rate: float = 0.0,
+            window_size: int = 32,
+            shift_size: int = 0,
+            mlp_ratio=4.0,
+    ) -> None:
+        """
+        Args:
+            hidden_size: dimension of hidden layer.
+            mlp_dim: dimension of feedforward layer.
+            num_heads: number of attention heads.
+            dropout_rate: faction of the input units to drop.
+
+        """
+
+        super().__init__()
+        self.dim=dim
+        if not (0 <= dropout_rate <= 1):
+            raise ValueError("dropout_rate should be between 0 and 1.")
+
+        #if hidden_size % num_heads != 0:
+            #raise ValueError("hidden_size should be divisible by num_heads.")
+        self.mlp_ratio=mlp_ratio
+        self.window_size = window_size
+        self.shift_size = shift_size
+        self.input_resolution = input_resolution
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = MLPBlock(dim, mlp_hidden_dim, dropout_rate)
+        
+        #self.mlp = MLPBlock(hidden_size, dim, dropout_rate)
+        self.norm1 = nn.LayerNorm(dim)
+        self.attn = SWABlock(dim, num_heads, dropout_rate, window_size)
+        self.norm2 = nn.LayerNorm(dim)
+
+        self.pad = (self.window_size - input_resolution[0] % self.window_size) % self.window_size
+        if self.shift_size > 0:
+            img_mask = torch.zeros((1, self.input_resolution[0], 1))
+            img_mask = F.pad(img_mask, (0, 0, 0, self.pad, 0, 0))
+            d_slices = (slice(0, -self.window_size),
+                        slice(-self.window_size, -self.shift_size),
+                        slice(-self.shift_size, None))
+            cnt = 0
+            for d in d_slices:
+                img_mask[:, d, :] = cnt
+                cnt += 1
+
+            mask_windows = window_partition(img_mask, self.window_size)
+            mask_windows = mask_windows.view(-1, self.window_size)
+            attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+            attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        else:
+            attn_mask = None
+
+        self.register_buffer("attn_mask", attn_mask)
+
+    def forward(self, x, x_up,skip):
+        B, L, C = x.shape
+
+        shortcut = x
+        skip = self.norm1(skip)
+        x_up = self.norm1(x_up)
+
+        # skip = skip.view(B, S, H, W, C)
+        # x_up = x_up.view(B, S, H, W, C)
+        # x = x.view(B, S, H, W, C)
+        
+
+        if self.pad > 0:
+            x_up = F.pad(x, (0, 0, 0, self.pad, 0, 0))
+            skip = F.pad(x, (0, 0, 0, self.pad, 0, 0))
+
+        _, Lp, _ = skip.shape
+
+        if self.shift_size > 0:
+            shifted_x_up = torch.roll(x_up, shifts=(-self.shift_size), dims=(1,))
+            shifted_skip = torch.roll(skip, shifts=(-self.shift_size), dims=(1,))
+        else:
+            shifted_x_up = x_up
+            shifted_skip=skip
+        x_windows = window_partition(shifted_x_up, self.window_size)
+        y_windows = window_partition(shifted_skip, self.window_size)
+        x_windows=1/2*(x_windows+y_windows)
+        attn_windows = self.attn(x_windows, mask=self.attn_mask)
+        shifted_x = attn_windows.view(B, Lp, C)
+        if self.shift_size > 0:
+            x = torch.roll(shifted_x_up, shifts=(self.shift_size), dims=(1,))
+        else:
+            x = shifted_x_up
+
+        if self.pad > 0:
+            x = x[:, :L, :].contiguous()
+        
+        x = self.norm1(x.view(B, L, C))
+
+        x = shortcut + x
+
+        x = x + self.norm2(self.mlp(x))
+        return x
 
 class ContiguousGrad(torch.autograd.Function):
     @staticmethod
@@ -668,7 +776,8 @@ class Mlp(nn.Module):
         x = self.drop(x)
         x = self.fc2(x)
         x = self.drop(x)
-        return x
+        return
+
 
 
 # def window_partition_old(x, window_size):
@@ -1179,8 +1288,15 @@ class BasicLayer_up(nn.Module):
 
         # build blocks
         self.blocks = nn.ModuleList()
+        self.blocks.append(
+                SwinTransformerBlock_2(
+                        dim, 
+                        num_heads, 
+                        input_resolution=input_resolution,
+                        dropout_rate=0,
+                        window_size=window_size, shift_size=0 ) )
         
-        for i in range(depth):
+        for i in range(depth-1):
             self.blocks.append(
                 SwinTransformerBlock(
                         dim, 
@@ -1227,9 +1343,9 @@ class BasicLayer_up(nn.Module):
         # attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         # attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        
-        for i in range(self.depth):
-            x = self.blocks[i](x)
+        x=self.blocks[0](x,skip=skip,x_up=x_up)
+        for i in range(self.depth-1):
+            x = self.blocks[i+1](x)
         
         return x, S, H, W
         
