@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 from monai.networks.blocks.dynunet_block import UnetOutBlock
 from monai.networks.blocks import UnetrBasicBlock, UnetrPrUpBlock, UnetrUpBlock
 from monai.networks.blocks.dynunet_block import UnetBasicBlock, UnetResBlock, get_conv_layer
-from vtunet.network_architecture.neural_network import SegmentationNetwork
+#from vtunet.network_architecture.neural_network import SegmentationNetwork
 import torch
 import torch.nn as nn
 
