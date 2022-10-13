@@ -75,7 +75,7 @@ class Mlp(nn.Module):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
-        self.fc1 = nn.Linear(in_features, hidden_features)
+        self.fc1 = nn.Linear(in_features, out_features)
         self.act = act_layer()
         self.fc2 = nn.Linear(hidden_features, out_features)
         self.drop = nn.Dropout(drop)
@@ -84,8 +84,8 @@ class Mlp(nn.Module):
         x = self.fc1(x)
         x = self.act(x)
         x = self.drop(x)
-        x = self.fc2(x)
-        x = self.drop(x)
+        # x = self.fc2(x)
+        # x = self.drop(x)
         return x
 
 
@@ -109,7 +109,7 @@ def window_reverse(windows, window_size, S, H, W):
 class SwinTransformerBlock_kv(nn.Module):
 
 
-    def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
+    def __init__(self,dim, input_resolution, num_heads, window_size=7, shift_size=0,
                  mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., drop_path=0.,
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm):
         super().__init__()
@@ -134,8 +134,8 @@ class SwinTransformerBlock_kv(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp_seg(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
-        #self.grid
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.dwconv = DWConv(dim)
     def forward(self, x, mask_matrix,skip=None,x_up=None):
     
         B, L, C = x.shape
@@ -197,8 +197,10 @@ class SwinTransformerBlock_kv(nn.Module):
         # FFN
         x = shortcut + self.drop_path(x)
         x=self.norm2(x)
-        x= x.view(B,C, S, H, W)
+        #
         x=self.mlp(x)
+        x= x.view(B,C, S, H, W)
+        x=self.dwconv(x)
         x=x.view((B, S * H * W, C))
         x = x + self.drop_path(x)
 
@@ -242,7 +244,7 @@ class WindowAttention_kv(nn.Module):
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
-
+        #self.dwconv = DWConv(in_features)
         self.softmax = nn.Softmax(dim=-1)
         trunc_normal_(self.relative_position_bias_table, std=.02)
 
@@ -391,9 +393,9 @@ class SwinTransformerBlock(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp_seg(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
         #self.grid_attn = grid_attn
-       
+        self.dwconv=DWConv(dim)
     def forward(self, x, mask_matrix):
 
         B, L, C = x.shape
@@ -448,8 +450,9 @@ class SwinTransformerBlock(nn.Module):
         # FFN
         x = shortcut + self.drop_path(x)
         x=self.norm2(x)
-        x=x.view(B,C,S,H,W)
         x=self.mlp(x)
+        x= x.view(B,C, S, H, W)
+        x=self.dwconv(x)
         x=x.view(B, S*H*W, C)
         x = x + self.drop_path(x)
 
