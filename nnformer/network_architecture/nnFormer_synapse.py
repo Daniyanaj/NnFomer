@@ -198,7 +198,13 @@ class HiLo(nn.Module):
 
     def lofi(self, x):
         B, H, W, S, C = x.shape
-
+        #
+        #kv=kv.reshape(B_, N, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4).contiguous()
+        #q = q.reshape(B_,N,self.num_heads,C//self.num_heads).permute(0,2,1,3).contiguous()
+        #k,v = kv[0], kv[1]  
+        #q = q * self.scale
+        #attn = (q @ k.transpose(-2, -1).contiguous())
+        #
         q = self.l_q(x).reshape(B, H * W*S, self.l_heads, self.l_dim // self.l_heads).permute(0, 2, 1, 3)
 
         if self.ws > 1:
