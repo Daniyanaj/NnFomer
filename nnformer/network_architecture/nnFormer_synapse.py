@@ -170,7 +170,7 @@ class HiLo(nn.Module):
 
         # Low frequence attention (Lo-Fi)
         if self.l_heads > 0:
-            if self.ws != 1:
+            if self.ws>1:
                 self.sr = nn.AvgPool3d(kernel_size=window_size, stride=window_size)
             self.l_q = nn.Linear(self.dim, self.l_dim, bias=qkv_bias)
             self.l_kv = nn.Linear(self.dim, self.l_dim * 2, bias=qkv_bias)
@@ -210,23 +210,34 @@ class HiLo(nn.Module):
         #q = q * self.scale
         #attn = (q @ k.transpose(-2, -1).contiguous())
         #
+#
         q = self.l_q(x).reshape(B, H//2 * W//2*S//2, self.l_heads*2*2*2, self.l_dim // self.l_heads).permute(0, 2, 1, 3)
-
         if self.ws > 1:
-            x_ = x.permute(0, 3, 1, 2)
-            x_ = self.sr(x_).reshape(B, C, -1).permute(0, 2, 1)
+            x = x.permute(0, 4, 1, 2,3)
+            x_ = self.sr(x).reshape(B, C, -1).permute(0, 2, 1)
+            #q=self.sr(q).reshape(B, C, -1).permute(0, 2, 1)
+            
             kv = self.l_kv(x_).reshape(B, -1, 2, self.l_heads, self.l_dim // self.l_heads).permute(2, 0, 3, 1, 4)
+            #kv=x_.reshape(B, -1, 2, self.l_heads, self.l_dim // self.l_heads).permute(2, 0, 3, 1, 4)
+            
+            k, v = kv[0], kv[1]
+            
+            a,b,c,d=q.shape
+            q=q.reshape(a,b//8,c*8,d)
+            
+        
         else:
+            
             kv = self.l_kv(x).reshape(B, -1, 2, self.l_heads, self.l_dim // self.l_heads).permute(2, 0, 3, 1, 4)
-        k, v = kv[0], kv[1]
-        B,F,M,N=k.shape
-        k=k.reshape(B,F*8,M//8,N)
-        B,F,M,N=v.shape
-        v=v.reshape(B,F*8,M//8,N)
-        a,b,c,d=q.shape
-        q=q.reshape(a*8,b,c//8,d)
-        k=k.reshape(a*8,b,c//8,d)
-        v=v.reshape(a*8,b,c//8,d)
+            k, v = kv[0], kv[1]
+            B,F,M,N=k.shape
+            k=k.reshape(B,F*8,M//8,N)
+            B,F,M,N=v.shape
+            v=v.reshape(B,F*8,M//8,N)
+            a,b,c,d=q.shape
+            q=q.reshape(a*8,b,c//8,d)
+            k=k.reshape(a*8,b,c//8,d)
+            v=v.reshape(a*8,b,c//8,d)
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
         #attn=attn.reshape(2,6144,32,4096)
@@ -884,6 +895,7 @@ class BasicLayer(nn.Module):
         self.depth = depth
         # build blocks
         self.has_msa = has_msa
+        self.local_ws=local_ws
         block = Block if has_msa else ConvFFNBlock
         self.blocks = nn.ModuleList([
             block(
@@ -949,7 +961,7 @@ class BasicLayer_up(nn.Module):
         self.window_size = window_size
         self.shift_size = window_size // 2
         self.depth = depth
-        
+        self.local_ws=local_ws
 
         # build blocks
         self.blocks = nn.ModuleList()
@@ -1087,17 +1099,20 @@ class Encoder(nn.Module):
                  drop_path_rate=0.2,
                  norm_layer=nn.LayerNorm,
                  patch_norm=True,
+                 has_msa=[0, 0, 1, 1],
+                 alpha=0.5,
+                 local_ws=[0, 0, 1, 1],
                  out_indices=(0, 1, 2, 3)
                  ):
         super().__init__()
 
         self.pretrain_img_size = pretrain_img_size
-
+        self.local_ws=local_ws
         self.num_layers = len(depths)
         self.embed_dim = embed_dim
         self.patch_norm = patch_norm
         self.out_indices = out_indices
-
+        self.has_msa=has_msa
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
             patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
@@ -1129,6 +1144,9 @@ class Encoder(nn.Module):
                 drop_path=dpr[sum(
                     depths[:i_layer]):sum(depths[:i_layer + 1])],
                 norm_layer=norm_layer,
+                has_msa=self.has_msa[i_layer] == 1,
+                local_ws=self.local_ws[i_layer],
+                alpha=alpha,
                 downsample=PatchMerging
                 if (i_layer < self.num_layers - 1) else None
                 )
@@ -1184,14 +1202,17 @@ class Decoder(nn.Module):
                  drop_rate=0.,
                  attn_drop_rate=0.,
                  drop_path_rate=0.2,
+                 has_msa=[0, 0, 1, 1],
+                 alpha=0.5,
+                 local_ws=[0, 0, 1, 1],
                  norm_layer=nn.LayerNorm
                  ):
         super().__init__()
         
-
+        self.local_ws=local_ws
         self.num_layers = len(depths)
         self.pos_drop = nn.Dropout(p=drop_rate)
-
+        self.has_msa=has_msa
         # stochastic depth
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
 
@@ -1215,6 +1236,9 @@ class Decoder(nn.Module):
                 drop_path=dpr[sum(
                     depths[:i_layer]):sum(depths[:i_layer + 1])],
                 norm_layer=norm_layer,
+                has_msa=self.has_msa[i_layer] == 1,
+                local_ws=self.local_ws[i_layer],
+                alpha=alpha,
                 upsample=Patch_Expanding
                 )
             self.layers.append(layer)
@@ -1268,7 +1292,7 @@ class nnFormer(SegmentationNetwork):
                 window_size=[4,4,8,4],
                 has_msa=[0, 0, 1, 1],
                 alpha=0.5,
-                local_ws=[0, 0, 2, 1],
+                local_ws=[0, 0, 1, 1],
                 deep_supervision=True):
       
         super(nnFormer, self).__init__()
