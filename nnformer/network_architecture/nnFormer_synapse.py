@@ -1,3 +1,4 @@
+#from msilib.schema import Patch
 from einops import rearrange
 from copy import deepcopy
 from nnformer.utilities.nd_softmax import softmax_helper
@@ -60,7 +61,7 @@ class DWMlp(nn.Module):
             if m.bias is not None:
                 m.bias.data.zero_()
 
-    def forward(self, x, H, W):
+    def forward(self, x, H, W,S):
         x = self.fc1(x)
         B, N, C = x.shape
         x = x.transpose(1, 2).view(B, C, H, W,S)
@@ -138,7 +139,7 @@ class HiLo(nn.Module):
     HiLo Attention
     Link: https://arxiv.org/abs/2205.13213
     """
-    def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0., window_size=2, alpha=0.5):
+    def __init__(self, dim, norm_layer, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0., window_size=2, alpha=0.5):
         super().__init__()
         assert dim % num_heads == 0, f"dim {dim} should be divided by num_heads {num_heads}."
         head_dim = int(dim/num_heads)
@@ -148,7 +149,7 @@ class HiLo(nn.Module):
         self.l_heads = int(num_heads * alpha)
         # token dimension in Lo-Fi
         self.l_dim = self.l_heads * head_dim
-
+        self.norm_layer= nn.LayerNorm(dim)
         # self-attention heads in Hi-Fi
         self.h_heads = num_heads - self.l_heads
         # token dimension in Hi-Fi
@@ -156,9 +157,10 @@ class HiLo(nn.Module):
 
         # local window size. The `s` in our paper.
         self.ws = window_size
-
+        #self.downsample =downsample(dim=dim, norm_layer=norm_layer)
         if self.ws == 1:
             # ws == 1 is equal to a standard multi-head self-attention
+            #self.avg=nn.AvgPool3d(kernel_size=window_size, stride=2)
             self.h_heads = 0
             self.h_dim = 0
             self.l_heads = num_heads
@@ -198,6 +200,8 @@ class HiLo(nn.Module):
 
     def lofi(self, x):
         B, H, W, S, C = x.shape
+        # x=self.avg(x)
+        #x=PatchMerging(x,S,H,W)
         #
         #kv=kv.reshape(B_, N, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4).contiguous()
         #q = q.reshape(B_,N,self.num_heads,C//self.num_heads).permute(0,2,1,3).contiguous()
@@ -205,7 +209,7 @@ class HiLo(nn.Module):
         #q = q * self.scale
         #attn = (q @ k.transpose(-2, -1).contiguous())
         #
-        q = self.l_q(x).reshape(B, H * W*S, self.l_heads, self.l_dim // self.l_heads).permute(0, 2, 1, 3)
+        q = self.l_q(x).reshape(B, H//2 * W//2*S//2, self.l_heads*2*2*2, self.l_dim // self.l_heads).permute(0, 2, 1, 3)
 
         if self.ws > 1:
             x_ = x.permute(0, 3, 1, 2)
@@ -214,10 +218,15 @@ class HiLo(nn.Module):
         else:
             kv = self.l_kv(x).reshape(B, -1, 2, self.l_heads, self.l_dim // self.l_heads).permute(2, 0, 3, 1, 4)
         k, v = kv[0], kv[1]
+        B,F,M,N=k.shape
+        k=k.reshape(B,F*8,M//8,N)
+        B,F,M,N=v.shape
+        v=v.reshape(B,F*8,M//8,N)
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
+        #attn=attn.reshape(2,6144,32,4096)
         attn = attn.softmax(dim=-1)
-
+        #v=v.reshape(2,192,1024,32)
         x = (attn @ v).transpose(1, 2).reshape(B, H, W, S, self.l_dim)
         x = self.l_proj(x)
         return x
@@ -317,7 +326,7 @@ class Block(nn.Module):
 
         self.norm1 = norm_layer(dim)
         self.attn = HiLo(dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                                        attn_drop=attn_drop, proj_drop=drop, window_size=local_ws, alpha=alpha)
+                                        attn_drop=attn_drop, proj_drop=drop,norm_layer=norm_layer, window_size=local_ws, alpha=alpha)
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
@@ -326,8 +335,13 @@ class Block(nn.Module):
 
 
     def forward(self, x, H, W,S):
-        x = x + self.drop_path(self.attn(self.norm1(x), H, W,S))
-        x = x + self.drop_path(self.mlp(self.norm2(x), H, W,S))
+        a=self.norm1(x)
+        a=self.attn(a,H,W,S)
+        b=self.drop_path(a)
+        x = x + b
+        a=self.norm2(x)
+        b=self.mlp(a,H,S,W)
+        x = x + self.drop_path(b)
         return x
 
 
