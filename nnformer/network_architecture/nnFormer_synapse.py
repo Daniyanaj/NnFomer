@@ -199,7 +199,8 @@ class HiLo(nn.Module):
         return x
 
     def lofi(self, x):
-        B, H, W, S, C = x.shape
+        B ,S,H,W, C = x.shape
+        
         # x=self.avg(x)
         #x=PatchMerging(x,S,H,W)
         #
@@ -222,6 +223,10 @@ class HiLo(nn.Module):
         k=k.reshape(B,F*8,M//8,N)
         B,F,M,N=v.shape
         v=v.reshape(B,F*8,M//8,N)
+        a,b,c,d=q.shape
+        q=q.reshape(a*8,b,c//8,d)
+        k=k.reshape(a*8,b,c//8,d)
+        v=v.reshape(a*8,b,c//8,d)
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
         #attn=attn.reshape(2,6144,32,4096)
@@ -336,6 +341,7 @@ class Block(nn.Module):
 
     def forward(self, x, H, W,S):
         a=self.norm1(x)
+        #a=a.reshape(1024,64,192)
         a=self.attn(a,H,W,S)
         b=self.drop_path(a)
         x = x + b
