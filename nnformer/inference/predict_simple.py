@@ -214,7 +214,7 @@ def main():
     model_folder_name = join(network_training_output_dir, model, task_name, trainer + "__" +
                               args.plans_identifier)
     print("using model stored in ", model_folder_name)
-    assert isdir(model_folder_name), "model output folder not found. Expected: %s" % model_folder_name
+    #assert isdir(model_folder_name), "model output folder not found. Expected: %s" % model_folder_name
     
     import os
     import shutil
