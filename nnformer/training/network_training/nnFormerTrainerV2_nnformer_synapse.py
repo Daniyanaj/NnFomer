@@ -293,6 +293,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
 
                 l = self.loss(output, target)
                 l = l+l_gan
+                print(l)
 
             if do_backprop:
                 self.amp_grad_scaler.scale(l).backward()
