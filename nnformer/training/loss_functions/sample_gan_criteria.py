@@ -7,7 +7,7 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
-    def __init__(self, num_classes=2, matcher='hungarian', weight_dict=0.001, losses=0.0, focal_alpha=0.25, mask_out_stride=4, num_frames=1):
+    def __init__(self, num_classes=14, matcher='hungarian', weight_dict=0.001, losses=0.0, focal_alpha=0.25, mask_out_stride=4, num_frames=1):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
