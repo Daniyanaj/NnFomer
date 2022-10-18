@@ -1,6 +1,20 @@
 from einops import rearrange
 from copy import deepcopy
 from nnformer.utilities.nd_softmax import softmax_helper
+from torch import conv2d, nn
+import torch
+import numpy as np
+from nnformer.network_architecture.initialization import InitWeights_He
+from nnformer.network_architecture.neural_network import SegmentationNetwork
+import torch.nn.functional
+from models.gcn_lib import Grapher, act_layer
+
+import torch.nn.functional as F
+import torch.utils.checkpoint as checkpoint
+from timm.models.layers import DropPath, to_3tuple, trunc_normal_
+from einops import rearrange
+from copy import deepcopy
+from nnformer.utilities.nd_softmax import softmax_helper
 from torch import nn
 import torch
 import numpy as np
@@ -12,6 +26,17 @@ import torch.nn.functional
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 from timm.models.layers import DropPath, to_3tuple, trunc_normal_
+from functools import partial
+
+import torch
+import torch.utils.checkpoint as checkpoint
+#pipimport mmsegmentation
+#from mmsegmentation.models.builder import BACKBONES
+#from mmsegmentation.utils import get_root_logger
+from timm.models.layers import DropPath, trunc_normal_
+from torch import nn
+from torch.nn.modules.batchnorm import _BatchNorm
+
 
 class ContiguousGrad(torch.autograd.Function):
     @staticmethod
@@ -307,9 +332,74 @@ class WindowAttention(nn.Module):
         x = self.proj_drop(x)
         return x
 
+
+class Conv_FFN(nn.Module):
+    def __init__(self, in_features, mlp_ratio=4, out_features=None, act='GeLU', drop_path=0.0):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = in_features * mlp_ratio
+        self.conv1 = nn.Conv2d(in_features, hidden_features, 1, stride=1, padding=0)
+        self.act = nn.GELU()
+        self.conv2 = nn.Conv2d(hidden_features, out_features, 1, stride=1, padding=0)
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+
+    def forward(self, x):
+        shortcut = x
+        x = self.conv1(x)
+        x = self.act(x)
+        x = self.conv2(x)
+        x = self.drop_path(x) + shortcut
+        return x  # .reshape(B, C, N, 1)
+
+
+class GNN_Transformer(nn.Module):
+    def __init__(
+            self,
+            dim,
+            i,
+            blocks=1,
+            epsilon=0.1,
+            kernels=[3, 5],
+            reduction_ration=1,
+            dilation_rate=[1]
+    ):
+        super().__init__()
+        self.dim=dim
+        self.i=i
+        features=dim*(32//(i+1))
+        self.conv1=nn.Conv2d(6144,dim,1)
+        self.conv2=nn.Conv2d(dim,6144,1)
+        self.backbone = nn.ModuleList([])
+        for j in range(blocks):
+            self.backbone += [
+                nn.Sequential(Grapher(dim, i,kernel_size=kernels[j], dilation=dilation_rate[j], conv='edge', act='gelu',
+                                      norm='batch',
+                                      bias=True, stochastic=False, epsilon=epsilon, r=reduction_ration, n=196,
+                                      drop_path=0.0,
+                                      relative_pos=True),
+                              Conv_FFN(dim)
+                              )]
+
+    def forward(self, x, i,H,W):
+        B,L,C=x.shape
+        x=x.view(B,H,H,W,C)
+        x=x.view(B,C*H,H,W)
+        a,b,c,d=x.shape
+        x=self.conv1(x)
+        
+        residual = x
+
+        for i in range(len(self.backbone)):
+            x = self.backbone[i](x)
+        embedding_final = x + residual
+        embedding_final=self.conv2(embedding_final)
+        embedding_final= embedding_final.view(B,H*W*H,C)
+        return embedding_final
+
+
 class SwinTransformerBlock(nn.Module):
     
-    def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
+    def __init__(self,dim, input_resolution, num_heads, window_size=7, shift_size=0,
                  mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., drop_path=0.,
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm):
         super().__init__()
@@ -319,7 +409,7 @@ class SwinTransformerBlock(nn.Module):
         self.window_size = window_size
         self.shift_size = shift_size
         self.mlp_ratio = mlp_ratio
-   
+        #self.graph_transformer = GNN_Transformer(dim, blocks=1)
         if min(self.input_resolution) <= self.window_size:
             # if window size is larger than input resolution, we don't partition windows
             self.shift_size = 0
@@ -344,14 +434,15 @@ class SwinTransformerBlock(nn.Module):
     def forward(self, x, mask_matrix):
 
         B, L, C = x.shape
-
+        #print("shapei/p",x.shape)
         S, H, W = self.input_resolution
-   
+        #print("resi/p",self.input_resolution)
         assert L == S * H * W, "input feature has wrong size"
-        
         
         shortcut = x
         x = self.norm1(x)
+        #x=x.view(B*S,C,H,W)
+        #x = self.graph_transformer(x,S)
         x = x.view(B, S, H, W, C)
 
         # pad feature maps to multiples of window size
@@ -396,7 +487,8 @@ class SwinTransformerBlock(nn.Module):
         # FFN
         x = shortcut + self.drop_path(x)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
-
+        #print("op",x.shape)
+    
         return x
 
 
@@ -413,6 +505,8 @@ class PatchMerging(nn.Module):
     def forward(self, x, S, H, W):
 
         B, L, C = x.shape
+     #   print("x",x.shape)
+        #print("H",H)
         assert L == H * W * S, "input feature has wrong size"
         x = x.view(B, S, H, W, C)
         
@@ -451,6 +545,7 @@ class BasicLayer(nn.Module):
    
     def __init__(self,
                  dim,
+                 i_layer,
                  input_resolution,
                  depth,
                  num_heads,
@@ -468,10 +563,15 @@ class BasicLayer(nn.Module):
         self.window_size = window_size
         self.shift_size = window_size // 2
         self.depth = depth
+        self.dim=dim
+
+
         # build blocks
         
-        self.blocks = nn.ModuleList([
-            SwinTransformerBlock(
+        self.blk = nn.ModuleList()
+        for i in range(2):
+            self.blk.append(
+                SwinTransformerBlock(
                 dim=dim,
                 input_resolution=input_resolution,
                 num_heads=num_heads,
@@ -483,7 +583,16 @@ class BasicLayer(nn.Module):
                 drop=drop,
                 attn_drop=attn_drop,
                 drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-            for i in range(depth)])
+            )
+            
+        for j in range(2):
+            self.blk.append(
+                GNN_Transformer(
+                    dim,i_layer )
+
+            )
+         
+    
 
         # patch merging layer
         if downsample is not None:
@@ -491,7 +600,7 @@ class BasicLayer(nn.Module):
         else:
             self.downsample = None
 
-    def forward(self, x, S, H, W):
+    def forward(self, x, i, S, H, W):
       
 
         # calculate attention mask for SW-MSA
@@ -520,9 +629,12 @@ class BasicLayer(nn.Module):
                                          self.window_size * self.window_size * self.window_size)  
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
-        for blk in self.blocks:
-          
-            x = blk(x, attn_mask)
+        x = self.blk[0](x,attn_mask)
+        x = self.blk[1](x,attn_mask)
+        x = self.blk[2](x,i,S,H)
+        
+        x = self.blk[3](x,i,S,H)
+            
         if self.downsample is not None:
             x_down = self.downsample(x, S, H, W)
             Ws, Wh, Ww = (S + 1) // 2, (H + 1) // 2, (W + 1) // 2
@@ -554,9 +666,10 @@ class BasicLayer_up(nn.Module):
         
 
         # build blocks
+      
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock_kv(
+                SwinTransformerBlock_kv(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
@@ -569,26 +682,30 @@ class BasicLayer_up(nn.Module):
                     attn_drop=attn_drop,
                     drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
                     )
-        for i in range(depth-1):
-            self.blocks.append(
+        self.blocks.append( 
                 SwinTransformerBlock(
-                        dim=dim,
-                        input_resolution=input_resolution,
-                        num_heads=num_heads,
-                        window_size=window_size,
-                        shift_size=window_size // 2 ,
-                        mlp_ratio=mlp_ratio,
-                        qkv_bias=qkv_bias,
-                        qk_scale=qk_scale,
-                        drop=drop,
-                        attn_drop=attn_drop,
-                        drop_path=drop_path[i+1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-                        )
+                    dim=dim,
+                    input_resolution=input_resolution,
+                    num_heads=num_heads,
+                    window_size=window_size,
+                    shift_size=0 if (1 % 2 == 0) else window_size // 2,
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    drop=drop,
+                    attn_drop=attn_drop,
+                    drop_path=drop_path[1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer))
+        for i in range(2):    
+            self.blocks.append(
+                    GNN_Transformer(
+                    dim,
+                    i ))
+                
+                       
         
-
         
         self.Upsample = upsample(dim=2*dim, norm_layer=norm_layer)
-    def forward(self, x,skip, S, H, W):
+    def forward(self, x,i,skip, S, H, W):
         
       
         x_up = self.Upsample(x, S, H, W)
@@ -621,11 +738,18 @@ class BasicLayer_up(nn.Module):
                                          self.window_size * self.window_size * self.window_size)  # 3d��3��winds�˻�����Ŀ�Ǻܴ�ģ�����winds����̫��
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+
         
-        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
-        for i in range(self.depth-1):
-            x = self.blocks[i+1](x,attn_mask)
+        # for i in range(self.depth):
+        #     x = self.blocks(x, S,H,W)
+        x = self.blocks[0](x, attn_mask, skip=skip, x_up=x_up)
+        x= self.blocks[1](x, attn_mask)
+        x= self.blocks[2](x,i,S,H)
+
+
         
+        x = self.blocks[3](x, i,S ,H)
+            
         return x, S, H, W
         
 class project(nn.Module):
@@ -762,6 +886,7 @@ class Encoder(nn.Module):
                 drop_path=dpr[sum(
                     depths[:i_layer]):sum(depths[:i_layer + 1])],
                 norm_layer=norm_layer,
+                i_layer=i_layer,
                 downsample=PatchMerging
                 if (i_layer < self.num_layers - 1) else None
                 )
@@ -791,7 +916,7 @@ class Encoder(nn.Module):
       
         for i in range(self.num_layers):
             layer = self.layers[i]
-            x_out, S, H, W, x, Ws, Wh, Ww = layer(x, Ws, Wh, Ww)
+            x_out, S, H, W, x, Ws, Wh, Ww = layer(x,i, Ws, Wh, Ww)
             if i in self.out_indices:
                 norm_layer = getattr(self, f'norm{i}')
                 x_out = norm_layer(x_out)
@@ -866,7 +991,7 @@ class Decoder(nn.Module):
             
             layer = self.layers[i]
             
-            x, S, H, W,  = layer(x,skips[i], S, H, W)
+            x, S, H, W,  = layer(x,i,skips[i], S, H, H)
             out = x.view(-1, S, H, W, self.num_features[i])
             outs.append(out)
         return outs
@@ -957,7 +1082,3 @@ class nnFormer(SegmentationNetwork):
             return seg_outputs[-1]
         
         
-        
-   
-
-   
