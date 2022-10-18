@@ -191,7 +191,6 @@ def main():
             else:
                 # new training without pretraine weights, do nothing
                 pass
-
             trainer.run_training()
         else:
             if valbest:
