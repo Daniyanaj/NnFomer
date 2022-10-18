@@ -569,23 +569,9 @@ class BasicLayer(nn.Module):
         # build blocks
         
         self.blk = nn.ModuleList()
-        for i in range(2):
-            self.blk.append(
-                SwinTransformerBlock(
-                dim=dim,
-                input_resolution=input_resolution,
-                num_heads=num_heads,
-                window_size=window_size,
-                shift_size=0 if (i % 2 == 0) else window_size // 2,
-                mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                qk_scale=qk_scale,
-                drop=drop,
-                attn_drop=attn_drop,
-                drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-            )
+      
             
-        for j in range(2):
+        for j in range(4):
             self.blk.append(
                 GNN_Transformer(
                     dim,i_layer )
@@ -629,8 +615,8 @@ class BasicLayer(nn.Module):
                                          self.window_size * self.window_size * self.window_size)  
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
-        x = self.blk[0](x,attn_mask)
-        x = self.blk[1](x,attn_mask)
+        x = self.blk[0](x,i,S,H)
+        x = self.blk[1](x,i,S,H)
         x = self.blk[2](x,i,S,H)
         
         x = self.blk[3](x,i,S,H)
@@ -668,34 +654,7 @@ class BasicLayer_up(nn.Module):
         # build blocks
       
         self.blocks = nn.ModuleList()
-        self.blocks.append(
-                SwinTransformerBlock_kv(
-                    dim=dim,
-                    input_resolution=input_resolution,
-                    num_heads=num_heads,
-                    window_size=window_size,
-                    shift_size=0 ,
-                    mlp_ratio=mlp_ratio,
-                    qkv_bias=qkv_bias,
-                    qk_scale=qk_scale,
-                    drop=drop,
-                    attn_drop=attn_drop,
-                    drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-                    )
-        self.blocks.append( 
-                SwinTransformerBlock(
-                    dim=dim,
-                    input_resolution=input_resolution,
-                    num_heads=num_heads,
-                    window_size=window_size,
-                    shift_size=0 if (1 % 2 == 0) else window_size // 2,
-                    mlp_ratio=mlp_ratio,
-                    qkv_bias=qkv_bias,
-                    qk_scale=qk_scale,
-                    drop=drop,
-                    attn_drop=attn_drop,
-                    drop_path=drop_path[1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer))
-        for i in range(2):    
+        for i in range(4):    
             self.blocks.append(
                     GNN_Transformer(
                     dim,
@@ -742,8 +701,8 @@ class BasicLayer_up(nn.Module):
         
         # for i in range(self.depth):
         #     x = self.blocks(x, S,H,W)
-        x = self.blocks[0](x, attn_mask, skip=skip, x_up=x_up)
-        x= self.blocks[1](x, attn_mask)
+        x = self.blocks[0](x,i,S,H)
+        x= self.blocks[1](x,i,S,H)
         x= self.blocks[2](x,i,S,H)
 
 
