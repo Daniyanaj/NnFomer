@@ -340,13 +340,15 @@ class Conv_FFN(nn.Module):
         hidden_features = in_features * mlp_ratio
         self.conv1 = nn.Conv2d(in_features, hidden_features, 1, stride=1, padding=0)
         self.act = nn.GELU()
-        self.conv2 = nn.Conv2d(hidden_features, out_features, 1, stride=1, padding=0)
+        self.conv2 = nn.Conv2d(hidden_features, 6144, 1, stride=1, padding=0)
+        self.conv3= nn.Conv2d(in_features, 6144, 1, stride=1, padding=0)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
     def forward(self, x):
         shortcut = x
         x = self.conv1(x)
         x = self.act(x)
+        shortcut=self.conv3(shortcut)
         x = self.conv2(x)
         x = self.drop_path(x) + shortcut
         return x  # .reshape(B, C, N, 1)
@@ -367,8 +369,8 @@ class GNN_Transformer(nn.Module):
         self.dim=dim
         self.i=i
         features=dim*(32//(i+1))
-        self.conv1=nn.Conv2d(6144,dim,1)
-        self.conv2=nn.Conv2d(dim,6144,1)
+        #self.conv1=nn.Conv2d(6144,dim,1)
+        #self.conv2=nn.Conv2d(dim,6144,1)
         self.backbone = nn.ModuleList([])
         for j in range(blocks):
             self.backbone += [
@@ -385,14 +387,14 @@ class GNN_Transformer(nn.Module):
         x=x.view(B,H,H,W,C)
         x=x.view(B,C*H,H,W)
         a,b,c,d=x.shape
-        x=self.conv1(x)
+        #x=self.conv1(x)
         
         residual = x
 
         for i in range(len(self.backbone)):
             x = self.backbone[i](x)
         embedding_final = x + residual
-        embedding_final=self.conv2(embedding_final)
+        #embedding_final=self.conv2(embedding_final)
         embedding_final= embedding_final.view(B,H*W*H,C)
         return embedding_final
 
@@ -1034,10 +1036,14 @@ class nnFormer(SegmentationNetwork):
             for i in range(len(out)):  
                 seg_outputs.append(self.final[-(i+1)](out[i]))
         
-          
-            return seg_outputs[::-1]
+            a=seg_outputs[::-1]
+            #print(a)
+            return a
         else:
+        
             seg_outputs.append(self.final[0](out[-1]))
-            return seg_outputs[-1]
+            a=seg_outputs[-1]
+            #print(a)
+            return a
         
         
