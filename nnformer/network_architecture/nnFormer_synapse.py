@@ -894,7 +894,7 @@ class nnFormer(SegmentationNetwork):
                 input_channels=1, 
                 num_classes=14, 
                 conv_op=nn.Conv3d, 
-                depths=[2,2,2,2],
+                depths=[3,3,3,3],
                 num_heads=[6, 12, 24, 48],
                 patch_size=[2,4,4],
                 window_size=[4,4,8,4],
