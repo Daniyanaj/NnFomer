@@ -295,8 +295,9 @@ class Resblock(nn.Module):
         self.block = nn.Sequential(
             # pw
             _ConvBNReLU(hidden_dim, hidden_dim, 1),
+            _ConvBNReLU(hidden_dim, hidden_dim, 1)
             # dw
-            _DWConv(hidden_dim, hidden_dim, 1),
+            #_DWConv(hidden_dim, hidden_dim, 1),
             act_layer()
         )
 
