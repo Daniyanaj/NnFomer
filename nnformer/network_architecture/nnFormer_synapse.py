@@ -573,7 +573,7 @@ class BasicLayer(nn.Module):
         self.blk = nn.ModuleList()
       
             
-        for j in range(4):
+        for j in range(2):
             self.blk.append(
                 GNN_Transformer(
                     dim,i_layer )
@@ -618,8 +618,8 @@ class BasicLayer(nn.Module):
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         x = self.blk[0](x,i,S,H)
-        x = self.blk[1](x,i,S,H)
-        x = self.blk[2](x,i,S,H)
+        #x = self.blk[1](x,i,S,H)
+        #x = self.blk[2](x,i,S,H)
         
         x = self.blk[3](x,i,S,H)
             
@@ -656,7 +656,7 @@ class BasicLayer_up(nn.Module):
         # build blocks
       
         self.blocks = nn.ModuleList()
-        for i in range(4):    
+        for i in range(2):    
             self.blocks.append(
                     GNN_Transformer(
                     dim,
@@ -705,11 +705,11 @@ class BasicLayer_up(nn.Module):
         #     x = self.blocks(x, S,H,W)
         x = self.blocks[0](x,i,S,H)
         x= self.blocks[1](x,i,S,H)
-        x= self.blocks[2](x,i,S,H)
+        #x= self.blocks[2](x,i,S,H)
 
 
         
-        x = self.blocks[3](x, i,S ,H)
+        #x = self.blocks[3](x, i,S ,H)
             
         return x, S, H, W
         
