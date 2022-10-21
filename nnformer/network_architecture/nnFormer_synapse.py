@@ -193,6 +193,7 @@ class WindowAttention(nn.Module):
 
     def forward(self, x, attn_kv=None, mask=None):       
         B_, N, C = x.shape
+        x=x.reshape(B_*8,N//8,192)
         q, k, v = self.qkv(x,attn_kv)
         q = q * self.scale
         attn = (q @ k.transpose(-2, -1))
@@ -202,7 +203,8 @@ class WindowAttention(nn.Module):
         relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
         ratio = attn.size(-1)//relative_position_bias.size(-1)
         relative_position_bias = repeat(relative_position_bias, 'nH l c -> nH l (c d)', d = ratio)
-        
+        print(attn.shape)
+        print(relative_position_bias.unsqueeze(0).shape)
         attn = attn + relative_position_bias.unsqueeze(0)
 
         if mask is not None:
