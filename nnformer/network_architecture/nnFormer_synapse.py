@@ -13,6 +13,15 @@ import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 from timm.models.layers import DropPath, to_3tuple, trunc_normal_
 
+
+class ContiguousGrad(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        return x
+    @staticmethod
+    def backward(ctx, grad_out):
+        return grad_out.contiguous()
+
 class ConvBlock(nn.Module):
     def __init__(self, in_channel, out_channel, strides=1):
         super(ConvBlock, self).__init__()
@@ -157,7 +166,7 @@ class WindowAttention(nn.Module):
 
         # define a parameter table of relative position bias
         self.relative_position_bias_table = nn.Parameter(
-            torch.zeros((2 * win_size[0] - 1) * (2 * win_size[1] - 1), (2*win_size[2]-1),num_heads))  # 2*Wh-1 * 2*Ww-1, nH
+            torch.zeros((2 * win_size[0] - 1) * (2 * win_size[1] - 1)* (2*win_size[2]-1),num_heads))  # 2*Wh-1 * 2*Ww-1, nH
 
         # get pair-wise relative position index for each token inside the window
         coords_h = torch.arange(self.win_size[0]) # [0,...,Wh-1]
@@ -193,7 +202,7 @@ class WindowAttention(nn.Module):
 
     def forward(self, x, attn_kv=None, mask=None):       
         B_, N, C = x.shape
-        x=x.reshape(B_*8,N//8,192)
+        #x=x.reshape(B_*8,N//8,192)
         q, k, v = self.qkv(x,attn_kv)
         q = q * self.scale
         attn = (q @ k.transpose(-2, -1))
@@ -203,8 +212,8 @@ class WindowAttention(nn.Module):
         relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
         ratio = attn.size(-1)//relative_position_bias.size(-1)
         relative_position_bias = repeat(relative_position_bias, 'nH l c -> nH l (c d)', d = ratio)
-        print(attn.shape)
-        print(relative_position_bias.unsqueeze(0).shape)
+        #print(attn.shape)
+        #print(relative_position_bias.unsqueeze(0).shape)
         attn = attn + relative_position_bias.unsqueeze(0)
 
         if mask is not None:
@@ -354,7 +363,7 @@ class OutputProj(nn.Module):
 #########################################
 ########### LeWinTransformer #############
 class SwinTransformerBlock(nn.Module):
-    def __init__(self, dim, input_resolution, num_heads, win_size=8, shift_size=0,
+    def __init__(self, dim, input_resolution, num_heads, win_size=7, shift_size=0,
                  mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., drop_path=0.,
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm,token_projection='linear',token_mlp='resffn',se_layer=False):
         super().__init__()
@@ -410,7 +419,7 @@ class SwinTransformerBlock(nn.Module):
                         cnt += 1
 
             mask_windows = window_partition(img_mask, self.win_size)  # nW, win_size, win_size, 1
-            mask_windows = mask_windows.view(-1, self.win_size * self.win_size)
+            mask_windows = mask_windows.view(-1, self.win_size * self.win_size*self.win_size)
             attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
             attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
             attn_mask = attn_mask.type_as(x)
@@ -449,7 +458,7 @@ class SwinTransformerBlock(nn.Module):
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.win_size, self.win_size,self.win_size, C)
-        shifted_x = window_reverse(attn_windows, self.win_size, H, W,S,C)  # B H' W' C
+        shifted_x = window_reverse(attn_windows, self.win_size, H, W,S)  # B H' W' C
 
         # reverse cyclic shift
         if self.shift_size > 0:
@@ -577,7 +586,7 @@ class BasicLayer_up(nn.Module):
                  input_resolution,
                  depth,
                  num_heads,
-                 win_size=7,
+                 win_size,
                  mlp_ratio=4.,
                  qkv_bias=True,
                  qk_scale=None,
@@ -600,22 +609,22 @@ class BasicLayer_up(nn.Module):
         for i in range(depth):
             self.blocks.append(
                 SwinTransformerBlock(
-                        dim=dim,
-                        input_resolution=input_resolution,
-                        num_heads=num_heads,
-                        shift_size=win_size // 2 ,
-                        mlp_ratio=mlp_ratio,
-                        qkv_bias=qkv_bias,
-                        qk_scale=qk_scale,
-                        drop=drop,
-                        attn_drop=attn_drop,
-                        drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-                        )
-        
+                    dim=dim,
+                    input_resolution=input_resolution,
+                    win_size=win_size,
+                    num_heads=num_heads,
+                    shift_size=0 if (i % 2 == 0) else win_size // 2,
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    drop=drop,
+                    attn_drop=attn_drop,
+                    drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+            )
 
         
         self.Upsample = upsample(dim=2*dim, norm_layer=norm_layer)
-    def forward(self, x,skip, S, H, W):
+    def forward(self, x,skip, S, H, W, kv=None):
         
       
         x_up = self.Upsample(x, S, H, W)
@@ -623,35 +632,11 @@ class BasicLayer_up(nn.Module):
         x = x_up + skip
         S, H, W = S * 2, H * 2, W * 2
         # calculate attention mask for SW-MSA
-        Sp = int(np.ceil(S / self.win_size)) * self.win_size
-        Hp = int(np.ceil(H / self.win_size)) * self.win_size
-        Wp = int(np.ceil(W / self.win_size)) * self.win_size
-        img_mask = torch.zeros((1, Sp, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
-        s_slices = (slice(0, -self.win_size),
-                    slice(-self.win_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        h_slices = (slice(0, -self.win_size),
-                    slice(-self.win_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.win_size),
-                    slice(-self.win_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        cnt = 0
-        for s in s_slices:
-            for h in h_slices:
-                for w in w_slices:
-                    img_mask[:, s, h, w, :] = cnt
-                    cnt += 1
-
-        mask_windows = window_partition(img_mask, self.wind_size)  # nW, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1,
-                                         self.win_size * self.win_size * self.win_size)  # 3d��3��winds�˻�����Ŀ�Ǻܴ�ģ�����winds����̫��
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        #x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
-        for i in range(self.depth):
-            x = self.blocks[i](x,attn_mask)
+        
+        x = self.blocks[0](x, kv)
+        #for i in range(self.depth):
+        x = self.blocks[1](x,kv)
         
         return x, S, H, W
         
@@ -925,7 +910,7 @@ class nnFormer(SegmentationNetwork):
                 depths=[2,2,2,2],
                 num_heads=[6, 12, 24, 48],
                 patch_size=[2,4,4],
-                win_size=[8,8,8,8],
+                win_size=[4,4,8,4],
                 deep_supervision=True):
       
         super(nnFormer, self).__init__()
