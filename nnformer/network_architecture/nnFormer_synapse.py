@@ -306,18 +306,18 @@ class Resblock(nn.Module):
         
 #########################################
 ########### window operation#############
-def window_partition(x, window_size):
+def window_partition(x, win_size):
   
     B, S, H, W, C = x.shape
-    x = x.view(B, S // window_size, window_size, H // window_size, window_size, W // window_size, window_size, C)
-    windows = x.permute(0, 1, 3, 5, 2, 4, 6, 7).contiguous().view(-1, window_size, window_size, window_size, C)
+    x = x.view(B, S // win_size, win_size, H // win_size, win_size, W // win_size, win_size, C)
+    windows = x.permute(0, 1, 3, 5, 2, 4, 6, 7).contiguous().view(-1, win_size, win_size, win_size, C)
     return windows
 
 
-def window_reverse(windows, window_size, S, H, W):
+def window_reverse(windows, win_size, S, H, W):
    
-    B = int(windows.shape[0] / (S * H * W / window_size / window_size / window_size))
-    x = windows.view(B, S // window_size, H // window_size, W // window_size, window_size, window_size, window_size, -1)
+    B = int(windows.shape[0] / (S * H * W / win_size / win_size / win_size))
+    x = windows.view(B, S // win_size, H // win_size, W // win_size, win_size, win_size, win_size, -1)
     x = x.permute(0, 1, 4, 2, 5, 3, 6, 7).contiguous().view(B, S, H, W, -1)
     return x
 
@@ -434,7 +434,7 @@ class SwinTransformerBlock(nn.Module):
             kv = kv.view(B, H, W, S,C)
             # cyclic shift
             if self.shift_size > 0:
-                shifted_kv = torch.roll(kv, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2))
+                shifted_kv = torch.roll(kv, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
             else:
                 shifted_kv = kv    
             # partition windows
@@ -447,7 +447,7 @@ class SwinTransformerBlock(nn.Module):
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.win_size, self.win_size,self.win_size, C)
-        shifted_x = window_reverse(attn_windows, self.win_size, H, W,C)  # B H' W' C
+        shifted_x = window_reverse(attn_windows, self.win_size, H, W,S,C)  # B H' W' C
 
         # reverse cyclic shift
         if self.shift_size > 0:
@@ -518,7 +518,7 @@ class BasicLayer(nn.Module):
                  input_resolution,
                  depth,
                  num_heads,
-                 window_size=7,
+                 win_size,
                  mlp_ratio=4.,
                  qkv_bias=True,
                  qk_scale=None,
@@ -529,8 +529,8 @@ class BasicLayer(nn.Module):
                  downsample=True
                  ):
         super().__init__()
-        self.window_size = window_size
-        self.shift_size = window_size // 2
+        self.win_size = win_size
+        self.shift_size = win_size // 2
         self.depth = depth
         # build blocks
         
@@ -538,8 +538,9 @@ class BasicLayer(nn.Module):
             SwinTransformerBlock(
                 dim=dim,
                 input_resolution=input_resolution,
+                win_size=win_size,
                 num_heads=num_heads,
-                shift_size=0 if (i % 2 == 0) else window_size // 2,
+                shift_size=0 if (i % 2 == 0) else win_size // 2,
                 mlp_ratio=mlp_ratio,
                 qkv_bias=qkv_bias,
                 qk_scale=qk_scale,
@@ -574,7 +575,7 @@ class BasicLayer_up(nn.Module):
                  input_resolution,
                  depth,
                  num_heads,
-                 window_size=7,
+                 win_size=7,
                  mlp_ratio=4.,
                  qkv_bias=True,
                  qk_scale=None,
@@ -585,8 +586,8 @@ class BasicLayer_up(nn.Module):
                  upsample=True
                 ):
         super().__init__()
-        self.window_size = window_size
-        self.shift_size = window_size // 2
+        self.win_size = win_size
+        self.shift_size = win_size // 2
         self.depth = depth
         
 
@@ -600,7 +601,7 @@ class BasicLayer_up(nn.Module):
                         dim=dim,
                         input_resolution=input_resolution,
                         num_heads=num_heads,
-                        shift_size=window_size // 2 ,
+                        shift_size=win_size // 2 ,
                         mlp_ratio=mlp_ratio,
                         qkv_bias=qkv_bias,
                         qk_scale=qk_scale,
@@ -620,18 +621,18 @@ class BasicLayer_up(nn.Module):
         x = x_up + skip
         S, H, W = S * 2, H * 2, W * 2
         # calculate attention mask for SW-MSA
-        Sp = int(np.ceil(S / self.window_size)) * self.window_size
-        Hp = int(np.ceil(H / self.window_size)) * self.window_size
-        Wp = int(np.ceil(W / self.window_size)) * self.window_size
+        Sp = int(np.ceil(S / self.win_size)) * self.win_size
+        Hp = int(np.ceil(H / self.win_size)) * self.win_size
+        Wp = int(np.ceil(W / self.win_size)) * self.win_size
         img_mask = torch.zeros((1, Sp, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
-        s_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
+        s_slices = (slice(0, -self.win_size),
+                    slice(-self.win_size, -self.shift_size),
                     slice(-self.shift_size, None))
-        h_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
+        h_slices = (slice(0, -self.win_size),
+                    slice(-self.win_size, -self.shift_size),
                     slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
+        w_slices = (slice(0, -self.win_size),
+                    slice(-self.win_size, -self.shift_size),
                     slice(-self.shift_size, None))
         cnt = 0
         for s in s_slices:
@@ -640,9 +641,9 @@ class BasicLayer_up(nn.Module):
                     img_mask[:, s, h, w, :] = cnt
                     cnt += 1
 
-        mask_windows = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
+        mask_windows = window_partition(img_mask, self.wind_size)  # nW, window_size, window_size, 1
         mask_windows = mask_windows.view(-1,
-                                         self.window_size * self.window_size * self.window_size)  # 3d��3��winds�˻�����Ŀ�Ǻܴ�ģ�����winds����̫��
+                                         self.win_size * self.win_size * self.win_size)  # 3d��3��winds�˻�����Ŀ�Ǻܴ�ģ�����winds����̫��
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
@@ -735,7 +736,7 @@ class Encoder(nn.Module):
                  embed_dim=96,
                  depths=[2, 2, 2, 2],
                  num_heads=[4, 8, 16, 32],
-                 window_size=7,
+                 win_size=7,
                  mlp_ratio=4.,
                  qkv_bias=True,
                  qk_scale=None,
@@ -777,7 +778,7 @@ class Encoder(nn.Module):
                     pretrain_img_size[2] // patch_size[2] // 2 ** i_layer),
                 depth=depths[i_layer],
                 num_heads=num_heads[i_layer],
-                window_size=window_size[i_layer],
+                win_size=win_size[i_layer],
                 mlp_ratio=mlp_ratio,
                 qkv_bias=qkv_bias,
                 qk_scale=qk_scale,
@@ -834,7 +835,7 @@ class Decoder(nn.Module):
                  patch_size=4,
                  depths=[2,2,2],
                  num_heads=[24,12,6],
-                 window_size=4,
+                 win_size=4,
                  mlp_ratio=4.,
                  qkv_bias=True,
                  qk_scale=None,
@@ -863,7 +864,7 @@ class Decoder(nn.Module):
                     pretrain_img_size[2] // patch_size[2] // 2 ** (len(depths)-i_layer-1)),
                 depth=depths[i_layer],
                 num_heads=num_heads[i_layer],
-                window_size=window_size[i_layer],
+                win_size=win_size[i_layer],
                 mlp_ratio=mlp_ratio,
                 qkv_bias=qkv_bias,
                 qk_scale=qk_scale,
@@ -922,7 +923,7 @@ class nnFormer(SegmentationNetwork):
                 depths=[2,2,2,2],
                 num_heads=[6, 12, 24, 48],
                 patch_size=[2,4,4],
-                window_size=[4,4,8,4],
+                win_size=[8,8,8,8],
                 deep_supervision=True):
       
         super(nnFormer, self).__init__()
@@ -943,9 +944,9 @@ class nnFormer(SegmentationNetwork):
         depths=depths
         num_heads=num_heads
         patch_size=patch_size
-        window_size=window_size
-        self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
-        self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
+        win_size=win_size
+        self.model_down=Encoder(pretrain_img_size=crop_size,win_size=win_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
+        self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,win_size=win_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
         
         self.final=[]
         if self.do_ds:

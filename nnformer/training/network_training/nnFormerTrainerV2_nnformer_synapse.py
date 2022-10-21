@@ -69,7 +69,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         self.depths=[2, 2, 2, 2]
         self.num_heads=[6, 12, 24, 48]
         self.embedding_patch_size=[2,4,4]
-        self.window_size=[4,4,8,4]
+        self.win_size=[8,8,8,8]
         self.deep_supervision=True
     def initialize(self, training=True, force_load_plans=False):
         """
@@ -171,7 +171,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
                                 depths=self.depths,
                                 num_heads=self.num_heads,
                                 patch_size=self.embedding_patch_size,
-                                window_size=self.window_size,
+                                win_size=self.win_size,
                                 deep_supervision=self.deep_supervision)
         #if self.load_pretrain_weight:
             #checkpoint = torch.load('/home/xychen/jsguo/weight/gelunorm_former_skip_global_shift.model', map_location='cpu')
