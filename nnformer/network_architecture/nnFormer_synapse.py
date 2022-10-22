@@ -154,6 +154,9 @@ class LinearProjection_Concat_kv(nn.Module):
 
 #########################################
 ########### window-based self-attention #############
+
+
+
 class WindowAttention(nn.Module):
     def __init__(self, dim, win_size,num_heads, token_projection='linear', qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0.,se_layer=False):
 
@@ -635,7 +638,7 @@ class BasicLayer_up(nn.Module):
         # calculate attention mask for SW-MSA
         
         
-        x = self.blocks[0](x, kv)
+        x = self.blocks[0](x, kv=skip)
         #for i in range(self.depth):
         x = self.blocks[1](x,kv)
         
