@@ -744,7 +744,9 @@ class Encoder(nn.Module):
    
         # build layers
         self.layers = nn.ModuleList()
+        self.Encoder_dims=[]
         for i_layer in range(self.num_layers):
+
             layer = BasicLayer(
                 dim=int(embed_dim * 2 ** i_layer),
                 input_resolution=(
@@ -765,7 +767,7 @@ class Encoder(nn.Module):
                 if (i_layer < self.num_layers - 1) else None
                 )
             self.layers.append(layer)
-
+            self.Encoder_dims.append(int(embed_dim * 2 ** i_layer))
         num_features = [int(embed_dim * 2 ** i) for i in range(self.num_layers)]
         self.num_features = num_features
 
@@ -830,7 +832,7 @@ class Decoder(nn.Module):
         # build layers
         self.layers = nn.ModuleList()
         for i_layer in range(self.num_layers)[::-1]:
-            
+            #Encoder_dim=[]
             layer = BasicLayer_up(
                 dim=int(embed_dim * 2 ** (len(depths)-i_layer-1)),
                 input_resolution=(
@@ -850,6 +852,7 @@ class Decoder(nn.Module):
                 upsample=Patch_Expanding
                 )
             self.layers.append(layer)
+            #self.Encoder_dims.append(int(embed_dim * 2 ** i_layer))
         self.num_features = [int(embed_dim * 2 ** i) for i in range(self.num_layers)]
     def forward(self,x,skips):
             
@@ -921,7 +924,10 @@ class nnFormer(SegmentationNetwork):
         window_size=window_size
         self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
         self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
-        
+        self.conv1 = nn.Conv3d(self.model_down.Encoder_dims[0], self.model_down.Encoder_dims[0], kernel_size=1)
+        self.conv2 = nn.Conv3d(self.model_down.Encoder_dims[1], self.model_down.Encoder_dims[1], kernel_size=1)
+        self.conv3 = nn.Conv3d(self.model_down.Encoder_dims[2], self.model_down.Encoder_dims[2], kernel_size=1)
+        self.conv4 = nn.Conv3d(self.model_down.Encoder_dims[3], self.model_down.Encoder_dims[3], kernel_size=1)
         self.final=[]
         if self.do_ds:
             
@@ -938,10 +944,19 @@ class nnFormer(SegmentationNetwork):
       
             
         seg_outputs=[]
+        skip_fin=[]
         skips = self.model_down(x)
+        skips_0=self.conv1(skips[0])
+        skips_1=self.conv2(skips[1])
+        skips_2=self.conv3(skips[2])
+        skips_3=self.conv4(skips[3])
+        skip_fin.append(skips_0)
+        skip_fin.append(skips_1)
+        skip_fin.append(skips_2)
+        skip_fin.append(skips_3)
         neck=skips[-1]
-       
-        out=self.decoder(neck,skips)
+        
+        out=self.decoder(neck,skip_fin)
         
        
             
