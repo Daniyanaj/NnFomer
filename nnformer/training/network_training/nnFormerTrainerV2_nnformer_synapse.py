@@ -163,16 +163,17 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
   
       
         
-        self.network=nnFormer(crop_size=self.crop_size,
-                                embedding_dim=self.embedding_dim,
-                                input_channels=self.input_channels,
-                                num_classes=self.num_classes,
-                                conv_op=self.conv_op,
-                                depths=self.depths,
-                                num_heads=self.num_heads,
-                                patch_size=self.embedding_patch_size,
-                                window_size=self.window_size,
-                                deep_supervision=self.deep_supervision)
+        self.network=nnFormer(pretrained=None,
+                             pretrained2d=True,
+                             img_size=(128, 128, 128),
+                             patch_size=(4, 4, 4),
+                             in_chans=1,
+                             num_classes=14, 
+                             embed_dim=96,
+                             depths=self.depths,
+                             depths_decoder=[1,2,2,2],
+                             num_heads=self.num_heads,
+                             window_size=self.window_size)
         #if self.load_pretrain_weight:
             #checkpoint = torch.load('/home/xychen/jsguo/weight/gelunorm_former_skip_global_shift.model', map_location='cpu')
             #self.network.load_state_dict(checkpoint)
@@ -468,11 +469,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         """
         self.maybe_update_lr(self.epoch)  # if we dont overwrite epoch then self.epoch+1 is used which is not what we
         # want at the start of the training
-        ds = self.network.do_ds
-        if self.deep_supervision:
-            self.network.do_ds = True
-        else:
-            self.network.do_ds = False
+        
         ret = super().run_training()
-        self.network.do_ds = ds
+    
         return ret
