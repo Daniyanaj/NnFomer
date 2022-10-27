@@ -270,6 +270,20 @@ class _ConvBNReLU(nn.Module):
 
     def forward(self, x):
         return self.conv(x)
+class _ConvBNReLU_1(nn.Module):
+    """Conv-BN-ReLU"""
+
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=0, **kwargs):
+        super(_ConvBNReLU_1, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv3d(in_channels, out_channels, kernel_size, stride, padding, bias=False),
+            nn.LayerNorm(out_channels),
+            nn.GELU()
+            # nn.ReLU(True)
+        )
+
+    def forward(self, x):
+        return self.conv(x)
 
 class _DWConv(nn.Module):
     def __init__(self, dw_channels, out_channels, stride=1, **kwargs):
@@ -295,7 +309,7 @@ class Resblock(nn.Module):
         self.block = nn.Sequential(
             # pw
             _ConvBNReLU(hidden_dim, hidden_dim, 1),
-            _ConvBNReLU(hidden_dim, hidden_dim, 1),
+            _ConvBNReLU_1(hidden_dim, hidden_dim, 1),
             # dw
             #_DWConv(hidden_dim, hidden_dim, 1),
             act_layer()
