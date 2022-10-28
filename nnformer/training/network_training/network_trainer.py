@@ -94,7 +94,7 @@ class NetworkTrainer(object):
         # too high the training will take forever
         self.train_loss_MA_alpha = 0.93  # alpha * old + (1-alpha) * new
         self.train_loss_MA_eps = 5e-4  # new MA must be at least this much better (smaller)
-        self.max_num_epochs = 1000
+        self.max_num_epochs = 1200
         self.num_batches_per_epoch = 250
         self.num_val_batches_per_epoch = 50
         self.also_val_in_tr_mode = False
@@ -712,7 +712,7 @@ class NetworkTrainer(object):
     def validate(self, *args, **kwargs):
         pass
 
-    def find_lr(self, num_iters=1000, init_value=1e-6, final_value=10., beta=0.98):
+    def find_lr(self, num_iters=1200, init_value=1e-6, final_value=10., beta=0.98):
         """
         stolen and adapted from here: https://sgugger.github.io/how-do-you-find-a-good-learning-rate.html
         :param num_iters:
