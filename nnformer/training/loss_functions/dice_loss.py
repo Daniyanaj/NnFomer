@@ -58,7 +58,7 @@ def soft_skeletonize(x, thresh_width=10):
 
 
 
-class contour_loss(nn.Module):
+class contour_loss_orig(nn.Module):
     """
     Active Contour Loss
     based on sobel filter
@@ -116,15 +116,15 @@ class contour_loss(nn.Module):
         # length
         length = torch.sqrt(grd_x ** 2 + grd_y ** 2 + grd_z ** 2 + 1e-8)
         length = (length - length.min()) / (length.max() - length.min() + 1e-8)
-        length = torch.sum(length)
+        length = torch.mean(length)
 
         # region
         label = label.float()
         c_in = torch.ones_like(predication)
         c_out = torch.zeros_like(predication)
-        region_in = torch.abs(torch.sum(predication * ((label - c_in) ** 2)))
+        region_in = torch.abs(torch.mean(predication * ((label - c_in) ** 2)))
         region_out = torch.abs(
-            torch.sum((1 - predication) * ((label - c_out) ** 2)))
+            torch.mean((1 - predication) * ((label - c_out) ** 2)))
         region = region_in + region_out
 
         return self.alpha * region + length
@@ -527,9 +527,10 @@ class DC_and_BCE_loss(nn.Module):
         return result
 
 
-class GDL_and_CE_loss(nn.Module):
+class contour_loss(nn.Module):
+    #originally GDL+CE
     def __init__(self, gdl_dice_kwargs, ce_kwargs, aggregate="sum"):
-        super(GDL_and_CE_loss, self).__init__()
+        super(contour_loss, self).__init__()
         self.aggregate = aggregate
         self.ce = RobustCrossEntropyLoss(**ce_kwargs)
         self.dc = GDL(softmax_helper, **gdl_dice_kwargs)
