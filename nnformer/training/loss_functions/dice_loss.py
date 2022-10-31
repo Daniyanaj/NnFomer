@@ -58,8 +58,77 @@ def soft_skeletonize(x, thresh_width=10):
 
 
 
-
 class contour_loss(nn.Module):
+    """
+    Active Contour Loss
+    based on sobel filter
+    """
+
+    def __init__(self, classes=14, alpha=1):
+        super(contour_loss, self).__init__()
+        self.alpha = alpha
+        self.classes = classes
+        sobel = np.array([[[1., 2., 1.],
+                           [2., 4., 2.],
+                           [1., 2., 1.]],
+
+                          [[0., 0., 0.],
+                           [0., 0., 0.],
+                           [0., 0., 0.]],
+
+                          [[-1., -2., -1.],
+                           [-2., -4., -2.],
+                           [-1., -2., -1.]]])
+        #sobe=sobel.cuda() 
+
+        self.sobel_x = nn.Parameter(
+            torch.from_numpy(sobel.transpose(0, 1, 2)).float().unsqueeze(0).unsqueeze(0).expand(self.classes, 1, 3, 3,
+                                                                                                3), requires_grad=False)
+        self.sobel_y = nn.Parameter(
+            torch.from_numpy(sobel.transpose(1, 0, 2)).float().unsqueeze(0).unsqueeze(0).expand(self.classes, 1, 3, 3,
+                                                                                                3), requires_grad=False)
+        self.sobel_z = nn.Parameter(
+            torch.from_numpy(sobel.transpose(1, 2, 0)).float().unsqueeze(0).unsqueeze(0).expand(self.classes, 1, 3, 3,
+                                                                                                3), requires_grad=False)
+
+        self.diff_x = nn.Conv3d(self.classes, self.classes, groups=self.classes, kernel_size=3, stride=1, padding=1,
+                                bias=False)
+        self.diff_x.weight = self.sobel_x
+        #self.diff_x=self.diff_x.cuda
+        #self.diff_x.weight=self.diff_x.weight.cuda
+
+        self.diff_y = nn.Conv3d(self.classes, self.classes, groups=self.classes, kernel_size=3, stride=1, padding=1,
+                                bias=False)
+        self.diff_y.weight = self.sobel_y
+        self.diff_z = nn.Conv3d(self.classes, self.classes, groups=self.classes, kernel_size=3, stride=1, padding=1,
+                                bias=False)
+        self.diff_z.weight = self.sobel_z
+
+    def forward(self, predication, label):
+        #predication=predication.to(device)
+        self.diff_x=self.diff_x.cuda()
+        self.diff_y=self.diff_y.cuda()
+        self.diff_z=self.diff_z.cuda()
+        grd_x = self.diff_x(predication)
+        grd_y = self.diff_y(predication)
+        grd_z = self.diff_z(predication)
+
+        # length
+        length = torch.sqrt(grd_x ** 2 + grd_y ** 2 + grd_z ** 2 + 1e-8)
+        length = (length - length.min()) / (length.max() - length.min() + 1e-8)
+        length = torch.sum(length)
+
+        # region
+        label = label.float()
+        c_in = torch.ones_like(predication)
+        c_out = torch.zeros_like(predication)
+        region_in = torch.abs(torch.sum(predication * ((label - c_in) ** 2)))
+        region_out = torch.abs(
+            torch.sum((1 - predication) * ((label - c_out) ** 2)))
+        region = region_in + region_out
+
+        return self.alpha * region + length
+class contor_loss(nn.Module):
     '''
     inputs shape  (batch, channel, height, width).
     calculate the contour loss
