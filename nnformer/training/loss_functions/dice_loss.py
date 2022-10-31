@@ -20,6 +20,75 @@ from nnformer.utilities.nd_softmax import softmax_helper
 from nnformer.utilities.tensor_utilities import sum_tensor
 from torch import nn
 import numpy as np
+from typing import List
+
+
+import numbers
+import math
+from torch import Tensor, einsum
+from torch import nn
+#from utils import simplex, one_hot
+from scipy.ndimage import distance_transform_edt, morphological_gradient, distance_transform_cdt
+from skimage.measure import label, regionprops
+import matplotlib.pyplot as plt
+from torch.nn import functional as F
+
+def contour(x):
+    '''
+    Differenciable aproximation of contour extraction
+    
+    '''   
+    min_pool_x = torch.nn.functional.max_pool2d(x*-1, (3, 3), 1, 1)*-1
+    max_min_pool_x = torch.nn.functional.max_pool2d(min_pool_x, (3, 3), 1, 1)
+    contour = torch.nn.functional.relu(max_min_pool_x - min_pool_x)
+    return contour
+
+
+def soft_skeletonize(x, thresh_width=10):
+    '''
+    Differenciable aproximation of morphological skelitonization operaton
+    thresh_width - maximal expected width of vessel
+    '''
+    for i in range(thresh_width):
+        min_pool_x = torch.nn.functional.max_pool2d(x*-1, (3, 3), 1, 1)*-1
+        max_min_pool_x = torch.nn.functional.max_pool2d(min_pool_x, (3, 3), 1, 1)
+        contour = torch.nn.functional.relu(max_min_pool_x - min_pool_x)
+        x = torch.nn.functional.relu(x - contour)
+    return x
+
+
+
+
+class contour_loss(nn.Module):
+    '''
+    inputs shape  (batch, channel, height, width).
+    calculate the contour loss
+    Because pred and target at moment of loss calculation will be a torch tensors
+    it is preferable to calculate target_skeleton on the step of batch forming,
+    when it will be in numpy array format by means of opencv
+    '''
+    # def __init__(self, **kwargs):
+    #     super(contour_loss, self).__init__()
+    #     # Self.idc is used to filter out some classes of the target mask. Use fancy indexing
+    #     #self.idc: List[int] = [0,1]
+    #     #self.pc = probs[:, self.idc, ...].type(torch.float32)
+    #     #self.tc = target[:, self.idc, ...].type(torch.float32)
+        
+        #print(f"Initialized {self.__class__.__name__} with {kwargs}")
+    def forward( self,x: Tensor, y: Tensor,loss_mask=None) -> Tensor:
+        idc=0
+        pc =x[:, idc, ...].type(torch.float32)
+        tc =y[:, idc, ...].type(torch.float32)
+
+        b, _, w, h = pc.shape
+        cl_pred = contour(pc).sum(axis=(2,3))
+        target_contour = contour(tc).sum(axis=(2,3))
+        big_pen: Tensor = (cl_pred - target_contour) ** 2
+        contour_loss = big_pen / (w * h)
+        contour_loss=contour_loss.mean(axis=0)
+    
+        return contour_loss.mean(axis=0)
+
 
 
 class GDL(nn.Module):
@@ -301,7 +370,7 @@ class SoftDiceLossSquared(nn.Module):
         return -dc
 
 
-class DC_and_CE_loss(nn.Module):
+class DC_ad_CE_loss(nn.Module):
     def __init__(self, soft_dice_kwargs, ce_kwargs, aggregate="sum", square_dice=False, weight_ce=1, weight_dice=1,
                  log_dice=False, ignore_label=None):
         """

@@ -34,7 +34,7 @@ from nnformer.postprocessing.connected_components import determine_postprocessin
 from nnformer.training.data_augmentation.default_data_augmentation import default_3D_augmentation_params, \
     default_2D_augmentation_params, get_default_augmentation, get_patch_size
 from nnformer.training.dataloading.dataset_loading import load_dataset, DataLoader3D, DataLoader2D, unpack_dataset
-from nnformer.training.loss_functions.dice_loss import DC_and_CE_loss
+from nnformer.training.loss_functions.dice_loss import contour_loss
 from nnformer.training.network_training.network_trainer_synapse import NetworkTrainer
 from nnformer.utilities.nd_softmax import softmax_helper
 from nnformer.utilities.tensor_utilities import sum_tensor
@@ -105,7 +105,7 @@ class nnFormerTrainer_synapse(NetworkTrainer):
         self.basic_generator_patch_size = self.data_aug_params = self.transpose_forward = self.transpose_backward = None
 
         self.batch_dice = batch_dice
-        self.loss = DC_and_CE_loss({'batch_dice': self.batch_dice, 'smooth': 1e-5, 'do_bg': False}, {})
+        self.loss = contour_loss()
 
         self.online_eval_foreground_dc = []
         self.online_eval_tp = []
