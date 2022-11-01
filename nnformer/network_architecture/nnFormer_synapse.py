@@ -194,7 +194,7 @@ class WindowAttention(nn.Module):
         
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
-        self.se_layer = SELayer(dim) 
+        self.se_layer=nn.Identity()
         self.proj_drop = nn.Dropout(proj_drop)
 
         trunc_normal_(self.relative_position_bias_table, std=.02)
