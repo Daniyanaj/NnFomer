@@ -186,11 +186,11 @@ class WindowAttention(nn.Module):
 
         # self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         #if token_projection =='conv':
-        self.qkv = ConvProjection(dim,num_heads,dim//num_heads,bias=qkv_bias)
+        #self.qkv = ConvProjection(dim,num_heads,dim//num_heads,bias=qkv_bias)
         #elif token_projection =='linear_concat':
             #self.qkv = LinearProjection_Concat_kv(dim,num_heads,dim//num_heads,bias=qkv_bias)
         ##else:
-            #self.qkv = LinearProjection(dim,num_heads,dim//num_heads,bias=qkv_bias)
+        self.qkv = LinearProjection(dim,num_heads,dim//num_heads,bias=qkv_bias)
         
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
