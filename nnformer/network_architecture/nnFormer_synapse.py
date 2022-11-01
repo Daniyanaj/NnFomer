@@ -155,7 +155,7 @@ class LinearProjection_Concat_kv(nn.Module):
 #########################################
 ########### window-based self-attention #############
 class WindowAttention(nn.Module):
-    def __init__(self, dim, win_size,num_heads, token_projection='linear', qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0.,se_layer=False):
+    def __init__(self, dim, win_size,num_heads, token_projection='conv', qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0.,se_layer=False):
 
         super().__init__()
         self.dim = dim
@@ -185,16 +185,16 @@ class WindowAttention(nn.Module):
         self.register_buffer("relative_position_index", relative_position_index)
 
         # self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        if token_projection =='conv':
-            self.qkv = ConvProjection(dim,num_heads,dim//num_heads,bias=qkv_bias)
-        elif token_projection =='linear_concat':
-            self.qkv = LinearProjection_Concat_kv(dim,num_heads,dim//num_heads,bias=qkv_bias)
-        else:
-            self.qkv = LinearProjection(dim,num_heads,dim//num_heads,bias=qkv_bias)
+        #if token_projection =='conv':
+        self.qkv = ConvProjection(dim,num_heads,dim//num_heads,bias=qkv_bias)
+        #elif token_projection =='linear_concat':
+            #self.qkv = LinearProjection_Concat_kv(dim,num_heads,dim//num_heads,bias=qkv_bias)
+        ##else:
+            #self.qkv = LinearProjection(dim,num_heads,dim//num_heads,bias=qkv_bias)
         
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
-        self.se_layer = SELayer(dim) if se_layer else nn.Identity()
+        self.se_layer = SELayer(dim) 
         self.proj_drop = nn.Dropout(proj_drop)
 
         trunc_normal_(self.relative_position_bias_table, std=.02)
@@ -388,7 +388,7 @@ class SwinTransformerBlock(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim,act_layer=act_layer, drop=drop) if token_mlp=='ffn' else Resblock(dim,mlp_hidden_dim,act_layer=act_layer, drop=drop)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim,act_layer=act_layer, drop=drop) 
 
     def extra_repr(self) -> str:
         return f"dim={self.dim}, input_resolution={self.input_resolution}, num_heads={self.num_heads}, " \
