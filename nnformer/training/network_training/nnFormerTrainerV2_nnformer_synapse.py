@@ -337,7 +337,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
             self.print_to_log_file("Desired fold for training: %d" % self.fold)
             splits[self.fold]['train']=np.array(['img0006','img0007' ,'img0009', 'img0010', 'img0021' ,'img0023' ,'img0024','img0026' ,'img0027' ,'img0031', 'img0033' ,'img0034' \
                                 ,'img0039', 'img0040','img0005', 'img0028', 'img0030', 'img0037'])
-            splits[self.fold]['val']=np.array(['img0001', 'img0002', 'img0003', 'img0004', 'img0008', 'img0022','img0025', 'img0029', 'img0032', 'img0035', 'img0036', 'img0038'])
+            splits[self.fold]['val']=np.array(['img0061', 'img0062', 'img0063', 'img0064', 'img0065', 'img0066','img0067', 'img0068', 'img0069', 'img0070', 'img0071', 'img0072','img0073', 'img0074', 'img0075', 'img0076','img0077', 'img0078', 'img0079', 'img0080'])
             if self.fold < len(splits):
                 tr_keys = splits[self.fold]['train']
                 val_keys = splits[self.fold]['val']
