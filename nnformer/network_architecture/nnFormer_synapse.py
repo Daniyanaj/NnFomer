@@ -698,7 +698,43 @@ class PatchEmbed(nn.Module):
             x = x.transpose(1, 2).contiguous().view(-1, self.embed_dim, Ws, Wh, Ww)
 
         return x
+class PatchEmbed2(nn.Module):
 
+    def __init__(self, patch_size=16, in_chans=4, embed_dim=96, norm_layer=None):
+        super().__init__()
+        patch_size = to_3tuple(patch_size)
+        self.patch_size = patch_size
+
+        self.in_chans = in_chans
+        self.embed_dim = embed_dim
+        stride1=[patch_size[0],patch_size[1]//2,patch_size[2]//2]
+        stride2=[patch_size[0]//2,patch_size[1]//2,patch_size[2]//2]
+        #stride1=[2,4,4]
+        self.proj1 = project(in_chans,786,stride1,1,nn.GELU,nn.LayerNorm,False)
+        self.proj2 = project(786,1536,stride2,1,nn.GELU,nn.LayerNorm,True)
+        if norm_layer is not None:
+            self.norm = norm_layer(1536)
+        else:
+            self.norm = None
+
+    def forward(self, x):
+        """Forward function."""
+        # padding
+        _, _, S, H, W = x.size()
+        if W % self.patch_size[2] != 0:
+            x = F.pad(x, (0, self.patch_size[2] - W % self.patch_size[2]))
+        if H % self.patch_size[1] != 0:
+            x = F.pad(x, (0, 0, 0, self.patch_size[1] - H % self.patch_size[1]))
+        if S % self.patch_size[0] != 0:
+            x = F.pad(x, (0, 0, 0, 0, 0, self.patch_size[0] - S % self.patch_size[0]))
+        x = self.proj1(x)  # B C Ws Wh Ww
+        x = self.proj2(x)  # B C Ws Wh Ww
+        if self.norm is not None:
+            Ws, Wh, Ww = x.size(2), x.size(3), x.size(4)
+            x = x.flatten(2).transpose(1, 2).contiguous()
+            x = self.norm(x)
+            x = x.transpose(1, 2).contiguous().view(-1, 1536, Ws, Wh, Ww)
+        return x    
 
 
 class Encoder(nn.Module):
@@ -800,6 +836,106 @@ class Encoder(nn.Module):
                 down.append(out)
         return down
 
+
+class Encoder2(nn.Module):
+   
+    def __init__(self,
+                 pretrain_img_size=224,
+                 patch_size=16,
+                 in_chans=1  ,
+                 embed_dim=96,
+                 depths=[2, 2, 2, 2],
+                 num_heads=[4, 8, 16, 32],
+                 window_size=7,
+                 mlp_ratio=4.,
+                 qkv_bias=True,
+                 qk_scale=None,
+                 drop_rate=0.,
+                 attn_drop_rate=0.,
+                 drop_path_rate=0.2,
+                 norm_layer=nn.LayerNorm,
+                 patch_norm=True,
+                 out_indices=(0, 1, 2, 3)
+                 ):
+        super().__init__()
+
+        self.pretrain_img_size = pretrain_img_size
+
+        self.num_layers = len(depths)
+        self.embed_dim = embed_dim
+        self.patch_norm = patch_norm
+        self.out_indices = out_indices
+
+        # split image into non-overlapping patches
+        self.patch_embed = PatchEmbed2(
+            patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
+            norm_layer=norm_layer if self.patch_norm else None)
+
+       
+
+        self.pos_drop = nn.Dropout(p=drop_rate)
+
+        # stochastic depth
+     # stochastic depth decay rule
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
+   
+        # build layers
+        self.layers = nn.ModuleList()
+        for i_layer in range(self.num_layers):
+            layer = BasicLayer(
+                dim=int(embed_dim * 2 ** 3),
+                input_resolution=(2,2,2),
+                depth=depths[3],
+                num_heads=num_heads[3],
+                window_size=window_size[3],
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                qk_scale=qk_scale,
+                drop=drop_rate,
+                attn_drop=attn_drop_rate,
+                drop_path=dpr[sum(
+                    depths[:3]):sum(depths[:3 + 1])],
+                norm_layer=norm_layer,
+                downsample=PatchMerging
+                if (i_layer < self.num_layers - 1) else None
+                )
+            self.layers.append(layer)
+
+        num_features = [int(embed_dim * 2 ** i) for i in range(self.num_layers)]
+        self.num_features = num_features
+
+        # add a norm layer for each output
+        for i_layer in out_indices:
+            layer = norm_layer(num_features[i_layer])
+            layer_name = f'norm{i_layer}'
+            self.add_module(layer_name, layer)
+
+
+    def forward(self, x):
+        """Forward function."""
+        
+        x = self.patch_embed(x)
+        down=[]
+       
+        Ws, Wh, Ww = x.size(2), x.size(3), x.size(4)
+        
+        x = x.flatten(2).transpose(1, 2).contiguous()
+        x = self.pos_drop(x)
+        
+      
+        for i in range(1):
+            layer = self.layers[i]
+            x_out, S, H, W, x, Ws, Wh, Ww = layer(x, Ws, Wh, Ww)
+            if i in self.out_indices:
+                norm_layer = getattr(self, f'norm{3}')
+                x_out = norm_layer(x_out)
+
+                out = x_out.view(-1, S, H, W, self.num_features[3]).permute(0, 4, 1, 2, 3).contiguous()
+              
+                down.append(out)
+        return down
+
+
    
 
 class Decoder(nn.Module):
@@ -897,6 +1033,8 @@ class nnFormer(SegmentationNetwork):
                 depths=[2,2,2,2],
                 num_heads=[6, 12, 24, 48],
                 patch_size=[2,4,4],
+                patch_size2=[8,16,16],
+                window_size2=[16,16,32,16],
                 window_size=[4,4,8,4],
                 deep_supervision=True):
       
@@ -918,8 +1056,10 @@ class nnFormer(SegmentationNetwork):
         depths=depths
         num_heads=num_heads
         patch_size=patch_size
+        
         window_size=window_size
         self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
+        self.model_down2=Encoder2(pretrain_img_size=crop_size,window_size=window_size2,embed_dim=embed_dim,patch_size=patch_size2,depths=depths,num_heads=num_heads,in_chans=input_channels)
         self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
         
         self.final=[]
@@ -939,8 +1079,12 @@ class nnFormer(SegmentationNetwork):
             
         seg_outputs=[]
         skips = self.model_down(x)
+        skips2=self.model_down2(x)
+        neck2=skips2[-1]
         neck=skips[-1]
-       
+        up=torch.nn.Upsample(4)
+        neck2=up(neck2)
+        neck=neck+neck2
         out=self.decoder(neck,skips)
         
        

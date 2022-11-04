@@ -69,7 +69,9 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         self.depths=[2, 2, 2, 2]
         self.num_heads=[6, 12, 24, 48]
         self.embedding_patch_size=[2,4,4]
+        self.embedding_patch_size2=[8,16,16]
         self.window_size=[4,4,8,4]
+        self.window_size2=[16,16,32,16]
         self.deep_supervision=True
     def initialize(self, training=True, force_load_plans=False):
         """
