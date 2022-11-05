@@ -190,6 +190,7 @@ class WindowAttention_kv(nn.Module):
         self.kv = nn.Linear(dim, dim * 2, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
+        self.se_layer = SELayer(dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
         self.softmax = nn.Softmax(dim=-1)
@@ -228,6 +229,7 @@ class WindowAttention_kv(nn.Module):
         if pos_embed is not None:
             x = x + pos_embed
         x = self.proj(x)
+        x = self.se_layer(x)
         x = self.proj_drop(x)
         return x
 class _ConvBNReLU(nn.Module):
@@ -244,6 +246,28 @@ class _ConvBNReLU(nn.Module):
 
     def forward(self, x):
         return self.conv(x)        
+
+class SELayer(nn.Module):
+    def __init__(self, channel, reduction=16):
+        super(SELayer, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):  # x: [B, N, C]
+        x = torch.transpose(x, 1, 2)  # [B, C, N]
+        b, c, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1)
+        x = x * y.expand_as(x)
+        x = torch.transpose(x, 1, 2)  # [B, N, C]
+        return x
+
+
 
 class Resblock(nn.Module):
 
@@ -314,6 +338,7 @@ class WindowAttention(nn.Module):
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
+        self.se_layer = SELayer(dim)
         self.proj_drop = nn.Dropout(proj_drop)
         trunc_normal_(self.relative_position_bias_table, std=.02)
 
@@ -350,6 +375,7 @@ class WindowAttention(nn.Module):
         if pos_embed is not None:
             x = x+pos_embed
         x = self.proj(x)
+        x = self.se_layer(x)
         x = self.proj_drop(x)
         return x
 
