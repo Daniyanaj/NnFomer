@@ -87,7 +87,7 @@ class SwinTransformerBlock_kv(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.mlp = Resblock(dim,mlp_hidden_dim,act_layer=act_layer, drop=drop)
        
     def forward(self, x, mask_matrix,skip=None,x_up=None):
     
@@ -230,6 +230,53 @@ class WindowAttention_kv(nn.Module):
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
+class _ConvBNReLU(nn.Module):
+    """Conv-BN-ReLU"""
+
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=0, **kwargs):
+        super(_ConvBNReLU, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv3d(in_channels, out_channels, kernel_size, stride, padding, bias=False),
+            nn.BatchNorm3d(out_channels),
+            nn.GELU()
+            # nn.ReLU(True)
+        )
+
+    def forward(self, x):
+        return self.conv(x)        
+
+class Resblock(nn.Module):
+
+    def __init__(self, dim=32, hidden_dim=128, act_layer=nn.GELU,drop = 0.):
+        super(Resblock, self).__init__()
+        self.linear1 = nn.Sequential(nn.Linear(dim, hidden_dim),
+                                act_layer())
+        self.linear2 = nn.Sequential(nn.Linear(hidden_dim, dim))
+        self.block = nn.Sequential(
+            # pw
+            _ConvBNReLU(hidden_dim, hidden_dim, 1),
+            _ConvBNReLU(hidden_dim, hidden_dim, 1),
+            # dw
+            #_DWConv(hidden_dim, hidden_dim, 1),
+            act_layer()
+        )
+
+    def forward(self, x):
+        # bs x hw x c
+        
+        bs, hw, c = x.size()
+        hh = int(round((hw)**(1/3)))
+        x = self.linear1(x)
+        # spatial restore
+        x = rearrange(x, ' b (h w s) (c) -> b c h w s ', h = hh, w = hh, s=hh).contiguous()
+
+        x = x+self.block(x)
+        # flaten
+        x = rearrange(x, ' b c h w s-> b (h w s) c', h = hh, w = hh, s=hh).contiguous()
+        x = self.linear2(x)
+        return x
+        
+
 
 class WindowAttention(nn.Module):
 
@@ -337,7 +384,7 @@ class SwinTransformerBlock(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.mlp = Resblock(dim,mlp_hidden_dim,act_layer=act_layer, drop=drop)
         
        
     def forward(self, x, mask_matrix):
