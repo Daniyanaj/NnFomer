@@ -311,7 +311,7 @@ class PosCNN(nn.Module):
         super(PosCNN, self).__init__()
         self.conv1=nn.Conv3d(in_chans, in_chans, 3, stride=1, padding=1, dilation=1)
         self.conv2=nn.Conv3d(in_chans, in_chans, 3, stride=1, padding=3, dilation=3)
-        self.conv3=nn.Conv3d(in_chans, in_chans, 3, stride=1, padding=5, dilation=5)
+        #self.conv3=nn.Conv3d(in_chans, in_chans, 3, stride=1, padding=5, dilation=5)
 
         self.s = s
 
@@ -320,8 +320,8 @@ class PosCNN(nn.Module):
         cnn_feat = rearrange(feat_token, 'b d h w c -> b c d h w')
         if self.s == 1:
             x=self.conv1(cnn_feat)
-            x=self.conv2(x)
-            x = self.conv3(x) + cnn_feat
+            x=self.conv2(x)+cnn_feat
+            #x = self.conv3(x) + cnn_feat
         else:
             x = self.proj(cnn_feat)
         x = rearrange(x, 'b c d h w -> b d h w c')
