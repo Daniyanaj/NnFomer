@@ -1103,7 +1103,7 @@ class nnFormer(SegmentationNetwork):
         self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
         self.model_down2=Encoder2(pretrain_img_size=crop_size,window_size=window_size2,embed_dim=embed_dim,patch_size=patch_size2,depths=depths,num_heads=num_heads,in_chans=input_channels)
         self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
-        
+        self.conv1 = nn.Conv3d(3072, 1536, kernel_size=3,stride=1, padding=1)
         self.final=[]
         if self.do_ds:
             
@@ -1126,7 +1126,9 @@ class nnFormer(SegmentationNetwork):
         neck=skips[-1]
         up=torch.nn.Upsample(4)
         neck2=up(neck2)
-        neck=neck+neck2
+        #neck=neck+neck2
+        neck=torch.cat((neck,neck2),1)
+        neck=self.conv1(neck)
         out=self.decoder(neck,skips)
         
        
