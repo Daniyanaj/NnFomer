@@ -306,6 +306,24 @@ class WindowAttention(nn.Module):
         x = self.proj_drop(x)
         return x
 
+class PosCNN(nn.Module):
+    def __init__(self, in_chans, embed_dim=768, s=1):
+        super(PosCNN, self).__init__()
+        self.proj = nn.Sequential(nn.Conv3d(in_chans, embed_dim, 3, s, 1, bias=True, groups=embed_dim), )
+        self.s = s
+
+    def forward(self, x):
+        feat_token = x
+        cnn_feat = rearrange(feat_token, 'b d h w c -> b c d h w')
+        if self.s == 1:
+            x = self.proj(cnn_feat) + cnn_feat
+        else:
+            x = self.proj(cnn_feat)
+        x = rearrange(x, 'b c d h w -> b d h w c')
+
+        return x
+
+
 class SwinTransformerBlock(nn.Module):
     
     def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
@@ -490,8 +508,13 @@ class BasicLayer(nn.Module):
         else:
             self.downsample = None
 
+        self.pos_block = PosCNN(in_chans=dim, embed_dim=dim)    
+
     def forward(self, x, S, H, W):
-      
+        B,L,C=x.shape
+        x=x.view(B,S,H,W,C)
+        x = self.pos_block(x)
+        x=rearrange(x, 'b d h w c-> b (d h w) c')
 
         # calculate attention mask for SW-MSA
         Sp = int(np.ceil(S / self.window_size)) * self.window_size
@@ -587,13 +610,20 @@ class BasicLayer_up(nn.Module):
 
         
         self.Upsample = upsample(dim=2*dim, norm_layer=norm_layer)
+        self.pos_block = PosCNN(in_chans=dim, embed_dim=dim)
     def forward(self, x,skip, S, H, W):
         
       
         x_up = self.Upsample(x, S, H, W)
        
         x = x_up + skip
+        
         S, H, W = S * 2, H * 2, W * 2
+        B,L,C=x.shape
+        x=x.view(B,S,H,W,C)
+        x = self.pos_block(x)
+        x=rearrange(x, 'b d h w c-> b (d h w) c')
+
         # calculate attention mask for SW-MSA
         Sp = int(np.ceil(S / self.window_size)) * self.window_size
         Hp = int(np.ceil(H / self.window_size)) * self.window_size
