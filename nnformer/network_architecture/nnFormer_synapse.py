@@ -77,15 +77,15 @@ class SepConv3d_kv(torch.nn.Module):
         super(SepConv3d_kv, self).__init__()
         in_channels=dim
         out_channels=dim*2
-        self.depthwise = nn.Conv3d(in_channels, in_channels, 3, 1, 1, bias=True, groups=dim)
-        self.pointwise = torch.nn.Conv3d(in_channels, out_channels, kernel_size=1)
+        self.depthwise = nn.Conv3d(in_channels, out_channels, 3, 1, 1, bias=True, groups=dim)
+        #self.pointwise = torch.nn.Conv3d(in_channels, out_channels, kernel_size=1)
         self.act_layer = act_layer() if act_layer is not None else nn.Identity()
         
 
     def forward(self, x):
         x = self.depthwise(x)
         x = self.act_layer(x)
-        x = self.pointwise(x)
+        #x = self.pointwise(x)
         return x        
 
 class SepConv3d(torch.nn.Module):
@@ -98,15 +98,15 @@ class SepConv3d(torch.nn.Module):
         super(SepConv3d, self).__init__()
         in_channels=dim
         out_channels=dim*3
-        self.depthwise = nn.Conv3d(in_channels, in_channels, 3, 1, 1, bias=True, groups=dim)
-        self.pointwise = torch.nn.Conv3d(in_channels, out_channels, kernel_size=1)
+        self.depthwise = nn.Conv3d(in_channels, out_channels, 3, 1, 1, bias=True, groups=dim)
+        #self.pointwise = torch.nn.Conv3d(in_channels, out_channels, kernel_size=1)
         self.act_layer = act_layer() if act_layer is not None else nn.Identity()
 
 
     def forward(self, x):
         x = self.depthwise(x)
         x = self.act_layer(x)
-        x = self.pointwise(x)
+        #x = self.pointwise(x)
         return x
 
 
