@@ -57,6 +57,57 @@ def window_reverse(windows, window_size, S, H, W):
     x = x.permute(0, 1, 4, 2, 5, 3, 6, 7).contiguous().view(B, S, H, W, -1)
     return x
 
+class DWConv(nn.Module):
+    def __init__(self, dim=768):
+        super(DWConv, self).__init__()
+        self.dwconv = nn.Conv3d(dim, dim, 3, 1, 1, bias=True, groups=dim)
+
+    def forward(self, x):
+        x = self.dwconv(x)
+        x = x.flatten(2).transpose(1, 2)
+        return x
+
+class SepConv3d_kv(torch.nn.Module):
+    def __init__(self,
+                 dim,
+                 kernel_size,
+                 stride=1,
+                 padding=0,
+                 dilation=1,act_layer=nn.ReLU):
+        super(SepConv3d_kv, self).__init__()
+        in_channels=dim
+        out_channels=dim*2
+        self.depthwise = nn.Conv3d(in_channels, in_channels, 3, 1, 1, bias=True, groups=dim)
+        self.pointwise = torch.nn.Conv3d(in_channels, out_channels, kernel_size=1)
+        self.act_layer = act_layer() if act_layer is not None else nn.Identity()
+        
+
+    def forward(self, x):
+        x = self.depthwise(x)
+        x = self.act_layer(x)
+        x = self.pointwise(x)
+        return x        
+
+class SepConv3d(torch.nn.Module):
+    def __init__(self,
+                 dim,
+                 kernel_size,
+                 stride=1,
+                 padding=0,
+                 dilation=1,act_layer=nn.ReLU):
+        super(SepConv3d, self).__init__()
+        in_channels=dim
+        out_channels=dim*3
+        self.depthwise = nn.Conv3d(in_channels, in_channels, 3, 1, 1, bias=True, groups=dim)
+        self.pointwise = torch.nn.Conv3d(in_channels, out_channels, kernel_size=1)
+        self.act_layer = act_layer() if act_layer is not None else nn.Identity()
+
+
+    def forward(self, x):
+        x = self.depthwise(x)
+        x = self.act_layer(x)
+        x = self.pointwise(x)
+        return x
 
 
 class SwinTransformerBlock_kv(nn.Module):
@@ -187,7 +238,7 @@ class WindowAttention_kv(nn.Module):
         relative_position_index = relative_coords.sum(-1)  
         self.register_buffer("relative_position_index", relative_position_index)
 
-        self.kv = nn.Linear(dim, dim * 2, bias=qkv_bias)
+        self.kv  =SepConv3d_kv(dim, dim*2, 3,1, 1)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
@@ -199,6 +250,10 @@ class WindowAttention_kv(nn.Module):
     def forward(self, skip,x_up,pos_embed=None, mask=None):
 
         B_, N, C = skip.shape
+        h=w=s= int(round((N)**(1/3)))
+        skip=skip.view(B_,C,h,w,s)
+        
+        
         
         kv = self.kv(skip)
         q = x_up
@@ -230,6 +285,35 @@ class WindowAttention_kv(nn.Module):
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
+
+class ConvProjection(nn.Module):
+    def __init__(self, dim, heads = 8, dim_head = 64, kernel_size=3, q_stride=1, k_stride=1, v_stride=1, dropout = 0.,
+                 last_stage=False,bias=True):
+
+        super().__init__()
+
+        inner_dim = dim_head *  heads
+        self.heads = heads
+        pad = (kernel_size - q_stride)//2
+        self.to_q = SepConv3d(dim, inner_dim, kernel_size, q_stride, pad, bias)
+        self.to_k = SepConv3d(dim, inner_dim, kernel_size, k_stride, pad, bias)
+        self.to_v = SepConv3d(dim, inner_dim, kernel_size, v_stride, pad, bias)
+
+    def forward(self, x, attn_kv=None):
+        b, n, c, h = *x.shape, self.heads
+        l=w=s= int(round((n)**(1/3)))
+        attn_kv = x if attn_kv is None else attn_kv
+        x = rearrange(x, 'b (l w s) c -> b c l w s', l=l, w=w, s=s)
+        attn_kv = rearrange(attn_kv, 'b (l w s) c -> b c l w s', l=l, w=w , s=s)
+        # print(attn_kv)
+        q = self.to_q(x)
+        q = rearrange(q, 'b (h d) l w s-> b h (l w s) d', h=h)
+        
+        k = self.to_k(attn_kv)
+        v = self.to_v(attn_kv)
+        k = rearrange(k, 'b (h d) l w s-> b h (l w s) d', h=h)
+        v = rearrange(v, 'b (h d) l w s -> b h (l w s) d', h=h)
+        return q,k,v    
 
 class WindowAttention(nn.Module):
 
@@ -264,7 +348,10 @@ class WindowAttention(nn.Module):
         relative_position_index = relative_coords.sum(-1) 
         self.register_buffer("relative_position_index", relative_position_index)
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        #self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.qkv =SepConv3d(dim, dim*3, 3,1, 1)
+        
+        
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
@@ -275,6 +362,8 @@ class WindowAttention(nn.Module):
     def forward(self, x, mask=None,pos_embed=None):
 
         B_, N, C = x.shape
+        h=w=s= int(round((N)**(1/3)))
+        x=x.view(B_,C,h,w,s)
         
         qkv = self.qkv(x)
         
