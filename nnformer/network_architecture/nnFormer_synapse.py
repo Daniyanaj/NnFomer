@@ -309,7 +309,7 @@ class WindowAttention(nn.Module):
 class PosCNN(nn.Module):
     def __init__(self, in_chans, embed_dim=768, s=1):
         super(PosCNN, self).__init__()
-        self.proj = nn.Sequential(nn.Conv3d(in_chans, embed_dim, 3, s, 1, bias=True, groups=embed_dim), )
+        self.proj = nn.Sequential(nn.Conv3d(in_chans, embed_dim, 3, s, 1) )
         self.s = s
 
     def forward(self, x):
