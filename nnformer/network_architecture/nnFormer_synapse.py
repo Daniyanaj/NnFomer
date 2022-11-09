@@ -187,7 +187,7 @@ class WindowAttention_kv(nn.Module):
         relative_position_index = relative_coords.sum(-1)  
         self.register_buffer("relative_position_index", relative_position_index)
 
-        self.kv = nn.Linear(dim, dim * 2, bias=qkv_bias)
+        self.kv = nn.Conv1d(dim, dim*2, 3, stride=1, padding=1, dilation=1, groups=dim, bias=True)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
@@ -199,6 +199,7 @@ class WindowAttention_kv(nn.Module):
     def forward(self, skip,x_up,pos_embed=None, mask=None):
 
         B_, N, C = skip.shape
+        skip=skip.view(B_,C,N)
         
         kv = self.kv(skip)
         q = x_up
@@ -264,7 +265,7 @@ class WindowAttention(nn.Module):
         relative_position_index = relative_coords.sum(-1) 
         self.register_buffer("relative_position_index", relative_position_index)
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.qkv = nn.Conv1d(dim, dim*3, 3, stride=1, padding=1, dilation=1, groups=dim, bias=True)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
@@ -275,7 +276,7 @@ class WindowAttention(nn.Module):
     def forward(self, x, mask=None,pos_embed=None):
 
         B_, N, C = x.shape
-        
+        x=x.view(B_,C,N)
         qkv = self.qkv(x)
         
         qkv=qkv.reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4).contiguous()
