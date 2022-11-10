@@ -851,21 +851,45 @@ class Decoder(nn.Module):
                 )
             self.layers.append(layer)
         self.num_features = [int(embed_dim * 2 ** i) for i in range(self.num_layers)]
+        self.conv1 = nn.Conv3d(384, 192, kernel_size=3,stride=1, padding=1)
+        self.conv2 = nn.Conv3d(768, 192, kernel_size=3, stride=1, padding=1)
+        self.conv3 = nn.Conv3d(1536, 192, kernel_size=3, stride=1, padding=1)
+        self.conv4=nn.Conv3d(768, 192, kernel_size=3, stride=1, padding=1)
+        self.conv5=nn.Conv3d(768, 384, kernel_size=3, stride=2, padding=1)
+        self.conv6=nn.Conv3d(768, 768, kernel_size=3, stride=4, padding=1)
+        self.conv7=nn.Conv3d(768, 1536, kernel_size=3, stride=8, padding=1)
     def forward(self,x,skips):
             
         outs=[]
         S, H, W = x.size(2), x.size(3), x.size(4)
         x = x.flatten(2).transpose(1, 2).contiguous()
-        for index,i in enumerate(skips):
+        skips_1=self.conv1(skips[1])
+        skips_2=self.conv2(skips[2])
+        skips_3=self.conv3(skips[3])
+        main=torch.nn.Upsample(32)
+        skips_1=main(skips_1)
+        skips_2=main(skips_2)
+        skips_3=main(skips_3)
+        skip=torch.cat((skips[0],skips_1,skips_2,skips_3),1)
+        skips_1=self.conv4(skip)
+        skips_2=self.conv5(skip)
+        skips_3=self.conv6(skip)
+        skips_4=self.conv7(skip)
+        skip_new=[]
+        skip_new.append(skips_1)
+        skip_new.append(skips_2)
+        skip_new.append(skips_3)
+        skip_new.append(skips_4)
+        for index,i in enumerate(skip_new):
              i = i.flatten(2).transpose(1, 2).contiguous()
-             skips[index]=i
+             skip_new[index]=i
         x = self.pos_drop(x)
             
         for i in range(self.num_layers)[::-1]:
             
             layer = self.layers[i]
             
-            x, S, H, W,  = layer(x,skips[i], S, H, W)
+            x, S, H, W,  = layer(x,skip_new[i], S, H, W)
             out = x.view(-1, S, H, W, self.num_features[i])
             outs.append(out)
         return outs
