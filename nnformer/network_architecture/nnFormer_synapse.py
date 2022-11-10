@@ -632,7 +632,7 @@ class project(nn.Module):
         super().__init__()
         self.out_dim=out_dim
         self.conv1=nn.Conv3d(in_dim,out_dim,kernel_size=3,stride=stride,padding=padding,groups=in_dim)
-        self.conv2=nn.Conv3d(out_dim,out_dim,kernel_size=3,stride=1,padding=1)
+        self.conv2=nn.Conv3d(out_dim,out_dim,kernel_size=3,stride=1,padding=1,groups=out_dim)
         self.activate=activate()
         self.norm1=norm(out_dim)
         self.last=last  
