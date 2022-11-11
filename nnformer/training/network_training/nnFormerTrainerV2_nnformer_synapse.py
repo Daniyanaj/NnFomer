@@ -66,8 +66,8 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         self.conv_op=nn.Conv3d
         
         self.embed_dim=96
-        self.depths=[2, 2, 2, 2]
-        self.num_heads=[6, 12, 24, 48]
+        self.depths=[2, 2, 6, 2]
+        self.num_heads=[3,6, 12, 24]
         self.embedding_patch_size=[2,4,4]
         self.group_size=[2,8,8]
         self.window_size=[4,4,8,4]
