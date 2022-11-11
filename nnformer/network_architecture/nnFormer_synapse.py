@@ -875,6 +875,10 @@ class Decoder(nn.Module):
         skips_2=self.conv5(skip)
         skips_3=self.conv6(skip)
         skips_4=self.conv7(skip)
+        skips_1=skips[0]+skips_1
+        skips_2=skips[1]+skips_2
+        skips_3=skips[2]+skips_3
+        skips_4=skips[3]+skips_4
         skip_new=[]
         skip_new.append(skips_1)
         skip_new.append(skips_2)
