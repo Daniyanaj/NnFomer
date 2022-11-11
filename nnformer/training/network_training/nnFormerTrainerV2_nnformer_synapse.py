@@ -61,14 +61,15 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
             Stage=0
             
         self.crop_size=self.plans['plans_per_stage'][Stage]['patch_size']
-        self.input_channels=self.plans['num_modalities']
+        self.in_chan=self.plans['num_modalities']
         self.num_classes=self.plans['num_classes'] + 1
         self.conv_op=nn.Conv3d
         
-        self.embedding_dim=192
+        self.embed_dim=96
         self.depths=[2, 2, 2, 2]
         self.num_heads=[6, 12, 24, 48]
         self.embedding_patch_size=[2,4,4]
+        self.group_size=[2,8,8]
         self.window_size=[4,4,8,4]
         self.deep_supervision=True
     def initialize(self, training=True, force_load_plans=False):
@@ -144,7 +145,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
             self.initialize_network()
             self.initialize_optimizer_and_scheduler()
 
-            assert isinstance(self.network, (SegmentationNetwork, nn.DataParallel))
+            assert isinstance(self.network, (nn.Module, nn.DataParallel))
         else:
             self.print_to_log_file('self.was_initialized is True, not running self.initialize again')
         self.was_initialized = True
@@ -163,15 +164,13 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
   
       
         
-        self.network=nnFormer(crop_size=self.crop_size,
-                                embedding_dim=self.embedding_dim,
-                                input_channels=self.input_channels,
+        self.network=nnFormer(embed_dim=self.embed_dim,
+                                in_chan=self.in_chan,
                                 num_classes=self.num_classes,
-                                conv_op=self.conv_op,
                                 depths=self.depths,
                                 num_heads=self.num_heads,
                                 patch_size=self.embedding_patch_size,
-                                window_size=self.window_size,
+                                group_size=self.group_size,
                                 deep_supervision=self.deep_supervision)
         #if self.load_pretrain_weight:
             #checkpoint = torch.load('/home/xychen/jsguo/weight/gelunorm_former_skip_global_shift.model', map_location='cpu')
