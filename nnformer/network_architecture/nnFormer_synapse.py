@@ -652,7 +652,7 @@ class project(nn.Module):
         self.last=last  
         if not last:
             self.norm2=norm(out_dim)
-            
+     #aaaa#       
     def forward(self,x):
         x=self.conv1(x)
         x=self.activate(x)
