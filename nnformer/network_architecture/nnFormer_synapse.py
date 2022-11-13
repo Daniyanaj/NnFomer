@@ -333,6 +333,24 @@ def window_reverse(windows, win_size, S, H, W):
     x = x.permute(0, 1, 4, 2, 5, 3, 6, 7).contiguous().view(B, S, H, W, -1)
     return x
 
+class PosCNN(nn.Module):
+    def __init__(self, in_chans, embed_dim=768, s=1):
+        super(PosCNN, self).__init__()
+        self.proj = nn.Sequential(nn.Conv3d(in_chans, embed_dim, 3, s, 1) )
+        self.s = s
+
+    def forward(self, x):
+        feat_token = x
+        cnn_feat = rearrange(feat_token, 'b d h w c -> b c d h w')
+        if self.s == 1:
+            x = self.proj(cnn_feat) + cnn_feat
+        else:
+            x = self.proj(cnn_feat)
+        x = rearrange(x, 'b c d h w -> b d h w c')
+
+        return x
+
+
 
 
 
@@ -388,7 +406,7 @@ class SwinTransformerBlock(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim,act_layer=act_layer, drop=drop) 
+        self.mlp = Resblock(dim,mlp_hidden_dim,act_layer=act_layer, drop=drop)
 
     def extra_repr(self) -> str:
         return f"dim={self.dim}, input_resolution={self.input_resolution}, num_heads={self.num_heads}, " \
@@ -567,7 +585,14 @@ class BasicLayer(nn.Module):
         else:
             self.downsample = None
 
+        self.pos_block = PosCNN(in_chans=dim, embed_dim=dim)       
+
     def forward(self, x, S, H, W, kv=None):
+        B,L,C=x.shape
+        x=x.view(B,S,H,W,C)
+        x = self.pos_block(x)
+        x=rearrange(x, 'b d h w c-> b (d h w) c')
+
    
                 
         for blk in self.blocks:
@@ -625,13 +650,21 @@ class BasicLayer_up(nn.Module):
 
         
         self.Upsample = upsample(dim=2*dim, norm_layer=norm_layer)
+        self.pos_block = PosCNN(in_chans=dim, embed_dim=dim)
+
     def forward(self, x,skip, S, H, W, kv=None):
+
         
       
         x_up = self.Upsample(x, S, H, W)
        
         x = x_up + skip
         S, H, W = S * 2, H * 2, W * 2
+        B,L,C=x.shape
+        x=x.view(B,S,H,W,C)
+        x = self.pos_block(x)
+        x=rearrange(x, 'b d h w c-> b (d h w) c')
+
         # calculate attention mask for SW-MSA
         
         
