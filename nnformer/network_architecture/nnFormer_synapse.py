@@ -187,7 +187,7 @@ class WindowAttention_kv(nn.Module):
         relative_position_index = relative_coords.sum(-1)  
         self.register_buffer("relative_position_index", relative_position_index)
 
-        self.kv = nn.Conv1d(dim, dim*2, 3, stride=1, padding=1, dilation=1, groups=1, bias=True)
+        self.kv = nn.Conv1d(dim, dim*2, 1, stride=1, padding=0, dilation=1, groups=1, bias=True)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
@@ -265,7 +265,7 @@ class WindowAttention(nn.Module):
         relative_position_index = relative_coords.sum(-1) 
         self.register_buffer("relative_position_index", relative_position_index)
 
-        self.qkv = nn.Conv1d(dim, dim*3, 3, stride=1, padding=1, dilation=1, groups=1, bias=True)
+        self.qkv = nn.Conv1d(dim, dim*3, 1, stride=1, padding=0, dilation=1, groups=1, bias=True)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
