@@ -307,16 +307,20 @@ class WindowAttention(nn.Module):
         return x
 
 class PosCNN(nn.Module):
-    def __init__(self, in_chans, embed_dim=768, s=1):
+    def __init__(self, in_chans, embed_dim=768, s=1,act_layer=nn.ReLU):
         super(PosCNN, self).__init__()
-        self.proj = nn.Sequential(nn.Conv3d(in_chans, embed_dim, 3, s, 1, bias=True, groups=embed_dim), )
+        self.proj =nn.Conv3d(in_chans, embed_dim, 3, s, 1, bias=True, groups=in_chans) 
+        self.pointwise = nn.Conv3d(embed_dim, embed_dim, kernel_size=1)
+        self.act_layer = act_layer() if act_layer is not None else nn.Identity()
         self.s = s
 
     def forward(self, x):
         feat_token = x
         cnn_feat = rearrange(feat_token, 'b d h w c -> b c d h w')
         if self.s == 1:
-            x = self.proj(cnn_feat) + cnn_feat
+            x = self.proj(cnn_feat) 
+            x = self.pointwise(x) + cnn_feat
+
         else:
             x = self.proj(cnn_feat)
         x = rearrange(x, 'b c d h w -> b d h w c')
