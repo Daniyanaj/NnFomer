@@ -231,6 +231,47 @@ class WindowAttention_kv(nn.Module):
         x = self.proj_drop(x)
         return x
 
+class SKFF(nn.Module):
+    def __init__(self, in_channels, height=3,reduction=8,bias=False):
+        super(SKFF, self).__init__()
+        
+        self.height = 15
+        d = max(int(in_channels/reduction),4)
+        
+        #self.avg_pool = nn.AdaptiveAvgPool3d(1)
+        self.conv_du = nn.Sequential(nn.Conv3d(in_channels, d, 1, padding=0, bias=bias), nn.LeakyReLU(0.2))
+
+        self.fcs = nn.ModuleList([])
+        for i in range(self.height):
+            self.fcs.append(nn.Conv3d(d, in_channels, kernel_size=1, stride=1,bias=bias))
+        
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, inp_feats):
+        batch_size = inp_feats[0].shape[0]
+        n_feats =  inp_feats[0].shape[1]
+        
+
+        inp_feats = torch.cat(inp_feats, dim=1)
+        a,b,c,d,e=inp_feats.shape   
+        inp_feats=inp_feats.reshape(2,b*8*8*8,c//8, d//8,e//8)
+        inp_feats = inp_feats.view(batch_size, 15,64, n_feats, inp_feats.shape[2], inp_feats.shape[3],inp_feats.shape[4])
+        inp_feats=torch.sum(inp_feats,dim=2)
+        
+        feats_U = torch.sum(inp_feats, dim=1)
+        #feats_S = self.avg_pool(feats_U)
+        feats_Z = self.conv_du(feats_U)
+
+        attention_vectors = [fc(feats_Z) for fc in self.fcs]
+        attention_vectors = torch.cat(attention_vectors, dim=1)
+        attention_vectors = attention_vectors.view(batch_size,15, n_feats, 4, 4,4)
+        # stx()
+        attention_vectors = self.softmax(attention_vectors)
+        
+        feats_V = torch.sum(inp_feats*attention_vectors, dim=1)
+        
+        return feats_V        
+
 class WindowAttention(nn.Module):
 
     def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0.):
@@ -921,7 +962,7 @@ class nnFormer(SegmentationNetwork):
         window_size=window_size
         self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
         self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
-        
+        self.skff = SKFF(in_channels=1536, height=4, reduction=8, bias=False)
         self.final=[]
         if self.do_ds:
             
@@ -939,9 +980,18 @@ class nnFormer(SegmentationNetwork):
             
         seg_outputs=[]
         skips = self.model_down(x)
+        down=torch.nn.Upsample(32)
+
+
+        skips_0 = skips[0]
+        skips_1 = down(skips[1])
+
+        skips_2 = down(skips[2])
+        skips_3 = down(skips[3])
+        one=self.skff([skips_3,skips_1,skips_2,skips_0])
         neck=skips[-1]
        
-        out=self.decoder(neck,skips)
+        out=self.decoder(one,skips)
         
        
             

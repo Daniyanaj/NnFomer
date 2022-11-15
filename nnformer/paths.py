@@ -28,7 +28,7 @@ PLEASE READ paths.md FOR INFORMATION TO HOW TO SET THIS UP
 
 base = '/home/daniya.kareem/nnFormer/DATASET/nnFormer_raw'
 preprocessing_output_dir = '/home/daniya.kareem/nnFormer/DATASET/nnFormer_preprocessed'
-network_training_output_dir_base = '/home/daniya.kareem/Desktop/Results/swin-3'
+network_training_output_dir_base = '/home/daniya.kareem/Desktop/Results/skff_new'
 
 if base is not None:
     nnFormer_raw_data = join(base, "nnFormer_raw_data")
