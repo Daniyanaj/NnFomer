@@ -152,6 +152,44 @@ class SwinTransformerBlock_kv(nn.Module):
         x = x + self.drop_path(self.mlp(self.norm2(x)))
 
         return x
+class SKFF(nn.Module):
+    def __init__(self, in_channels, height=3,reduction=8,bias=False):
+        super(SKFF, self).__init__()
+        
+        self.height = 2
+        d = max(int(in_channels/reduction),4)
+        
+        self.avg_pool = nn.AdaptiveAvgPool3d(1)
+        self.conv_du = nn.Sequential(nn.Conv3d(in_channels, d, 1, padding=0, bias=bias), nn.PReLU())
+
+        self.fcs = nn.ModuleList([])
+        for i in range(self.height):
+            self.fcs.append(nn.Conv3d(d, in_channels, kernel_size=1, stride=1,bias=bias))
+        
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, inp_feats):
+        batch_size = inp_feats[0].shape[0]
+        n_feats =  inp_feats[0].shape[1]
+        
+
+        inp_feats = torch.cat(inp_feats, dim=1)
+    
+        inp_feats = inp_feats.view(batch_size, self.height, n_feats, inp_feats.shape[2], inp_feats.shape[3],inp_feats.shape[4])
+        
+        feats_U = torch.sum(inp_feats, dim=1)
+        feats_S = self.avg_pool(feats_U)
+        feats_Z = self.conv_du(feats_U)
+
+        attention_vectors = [fc(feats_Z) for fc in self.fcs]
+        attention_vectors = torch.cat(attention_vectors, dim=1)
+        attention_vectors = attention_vectors.view(batch_size, self.height, n_feats, inp_feats.shape[3], inp_feats.shape[4],inp_feats.shape[5])
+        # stx()
+        attention_vectors = self.softmax(attention_vectors)
+        
+        feats_V = torch.sum(inp_feats*attention_vectors, dim=1)
+        
+        return feats_V                        
         
 class WindowAttention_kv(nn.Module):
    
@@ -1072,6 +1110,7 @@ class nnFormer(SegmentationNetwork):
             self.final.append(final_patch_expanding(embed_dim,num_classes,patch_size=patch_size))
     
         self.final=nn.ModuleList(self.final)
+        self.skff=SKFF(in_channels=1536, height=4, reduction=8, bias=False)
     
 
     def forward(self, x):
@@ -1084,7 +1123,7 @@ class nnFormer(SegmentationNetwork):
         neck=skips[-1]
         up=torch.nn.Upsample(4)
         neck2=up(neck2)
-        neck=neck+neck2
+        neck=self.skff([neck,neck2])
         out=self.decoder(neck,skips)
         
        
