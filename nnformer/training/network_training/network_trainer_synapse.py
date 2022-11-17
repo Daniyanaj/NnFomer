@@ -712,7 +712,7 @@ class NetworkTrainer(object):
     def validate(self, *args, **kwargs):
         pass
 
-    def find_lr(self, num_iters=1000, init_value=1e-6, final_value=10., beta=0.98):
+    def find_lr(self, num_iters=1000, init_value=1e-5, final_value=10., beta=0.98):
         """
         stolen and adapted from here: https://sgugger.github.io/how-do-you-find-a-good-learning-rate.html
         :param num_iters:
