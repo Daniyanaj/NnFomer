@@ -28,12 +28,20 @@ class Mlp(nn.Module):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
+        self.pool= nn.AvgPool3d(3, stride=1,padding=1)
         self.fc1 = nn.Linear(in_features, hidden_features)
         self.act = act_layer()
         self.fc2 = nn.Linear(hidden_features, out_features)
         self.drop = nn.Dropout(drop)
 
     def forward(self, x):
+        b,l,c=x.shape
+        H=W =S= int(round((l)**(1/3)))
+        a=x.view(b,c,H,W,S)
+
+        a=self.pool(a)
+        a=a.view(b,l,c)
+        x=x+a
         x = self.fc1(x)
         x = self.act(x)
         x = self.drop(x)
