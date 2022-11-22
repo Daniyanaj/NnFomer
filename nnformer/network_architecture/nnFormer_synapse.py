@@ -58,7 +58,44 @@ def window_reverse(windows, window_size, S, H, W):
     return x
 
 
+class SKFF(nn.Module):
+    def __init__(self, in_channels, height=3,reduction=8,bias=False):
+        super(SKFF, self).__init__()
+        
+        self.height = 15
+        d = max(int(in_channels/reduction),4)
+        
+        self.avg_pool = nn.AdaptiveAvgPool3d(1)
+        self.conv_du = nn.Sequential(nn.Conv3d(in_channels, 192, 1, padding=0, bias=bias), nn.PReLU())
 
+        self.fcs = nn.ModuleList([])
+        for i in range(self.height):
+            self.fcs.append(nn.Conv3d(192, in_channels, kernel_size=1, stride=1,bias=bias))
+        
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, inp_feats):
+        batch_size = inp_feats[0].shape[0]
+        n_feats =  inp_feats[0].shape[1]
+        
+
+        inp_feats = torch.cat(inp_feats, dim=1)
+    
+        inp_feats = inp_feats.view(batch_size, 15, n_feats, inp_feats.shape[2], inp_feats.shape[3],inp_feats.shape[4])
+        
+        feats_U = torch.sum(inp_feats, dim=1)
+        feats_S = self.avg_pool(feats_U)
+        feats_Z = self.conv_du(feats_U)
+
+        attention_vectors = [fc(feats_Z) for fc in self.fcs]
+        attention_vectors = torch.cat(attention_vectors, dim=1)
+        attention_vectors = attention_vectors.view(batch_size, 15, n_feats, inp_feats.shape[3], inp_feats.shape[4],inp_feats.shape[5])
+        # stx()
+        attention_vectors = self.softmax(attention_vectors)
+        
+        feats_V = torch.sum(inp_feats*attention_vectors, dim=1)
+        
+        return feats_V                
 class SwinTransformerBlock_kv(nn.Module):
 
 
@@ -816,7 +853,9 @@ class Decoder(nn.Module):
                  drop_rate=0.,
                  attn_drop_rate=0.,
                  drop_path_rate=0.2,
-                 norm_layer=nn.LayerNorm
+                 norm_layer=nn.LayerNorm,
+                 upsample=True
+                
                  ):
         super().__init__()
         
@@ -855,26 +894,30 @@ class Decoder(nn.Module):
         self.conv2 = nn.Conv3d(768, 192, kernel_size=3, stride=1, padding=1)
         self.conv3 = nn.Conv3d(1536, 192, kernel_size=3, stride=1, padding=1)
         self.conv4=nn.Conv3d(768, 192, kernel_size=3, stride=1, padding=1)
-        self.conv5=nn.Conv3d(768, 384, kernel_size=3, stride=2, padding=1)
-        self.conv6=nn.Conv3d(768, 768, kernel_size=3, stride=4, padding=1)
-        self.conv7=nn.Conv3d(768, 1536, kernel_size=3, stride=8, padding=1)
+        self.conv5=nn.Conv3d(192, 384, kernel_size=3, stride=2, padding=1)
+        self.conv6=nn.Conv3d(192, 768, kernel_size=5, stride=4, padding=1)
+        self.conv7=nn.Conv3d(192, 1536, kernel_size=9, stride=8, padding=1)
+        self.skff=SKFF(in_channels=192, height=4, reduction=8, bias=False)
+        self.upsample= upsample(dim=384, norm_layer=norm_layer)
     def forward(self,x,skips):
             
         outs=[]
         S, H, W = x.size(2), x.size(3), x.size(4)
         x = x.flatten(2).transpose(1, 2).contiguous()
-        skips_1=self.conv1(skips[1])
-        skips_2=self.conv2(skips[2])
-        skips_3=self.conv3(skips[3])
+        # skips_1=self.conv1(skips[1])
+        # skips_2=self.conv2(skips[2])
+        # skips_3=self.conv3(skips[3])
         main=torch.nn.Upsample(32)
-        skips_1=main(skips_1)
-        skips_2=main(skips_2)
-        skips_3=main(skips_3)
-        skip=torch.cat((skips[0],skips_1,skips_2,skips_3),1)
-        skips_1=self.conv4(skip)
-        skips_2=self.conv5(skip)
-        skips_3=self.conv6(skip)
-        skips_4=self.conv7(skip)
+        skips_1=main(skips[1])
+        skips_2=main(skips[2])
+        skips_3=main(skips[3])
+        
+        emb= self.skff([skips[0],skips_2,skips_1,skips_3])
+        #skip=torch.cat((skips[0],skips_1,skips_2,skips_3),1)
+        skips_1=emb
+        skips_2=self.conv5(emb)
+        skips_3=self.conv6(emb)
+        skips_4=self.conv7(emb)
         skip_new=[]
         skip_new.append(skips_1)
         skip_new.append(skips_2)
@@ -944,7 +987,7 @@ class nnFormer(SegmentationNetwork):
         patch_size=patch_size
         window_size=window_size
         self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
-        self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
+        self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:],upsample=Patch_Expanding)
         
         self.final=[]
         if self.do_ds:
