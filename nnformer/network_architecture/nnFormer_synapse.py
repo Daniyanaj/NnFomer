@@ -919,6 +919,10 @@ class Decoder(nn.Module):
         skips_3=self.conv6(emb)
         skips_4=self.conv7(emb)
         skip_new=[]
+        skips_1=skips_1+skips[0]
+        skips_2=skips_2+skips[1]
+        skips_3=skips_3+skips[2]
+        skips_4=skips_4+skips[3]
         skip_new.append(skips_1)
         skip_new.append(skips_2)
         skip_new.append(skips_3)
