@@ -328,9 +328,7 @@ class SwinTransformerBlock(nn.Module):
 
         self.norm1 = norm_layer(dim)
         
-        self.attn = WindowAttention(
-            dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
-            qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
+        self.attn = PATM(dim, qkv_bias=qkv_bias, qk_scale=None, attn_drop=attn_drop,mode='fc')
        
             
 
@@ -340,7 +338,7 @@ class SwinTransformerBlock(nn.Module):
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
         
        
-    def forward(self, x, mask_matrix):
+    def forward(self, x):
 
         B, L, C = x.shape
 
@@ -351,45 +349,13 @@ class SwinTransformerBlock(nn.Module):
         
         shortcut = x
         x = self.norm1(x)
-        x = x.view(B, S, H, W, C)
+        x = x.view(B, C, H, W, S)
 
-        # pad feature maps to multiples of window size
-        pad_r = (self.window_size - W % self.window_size) % self.window_size
-        pad_b = (self.window_size - H % self.window_size) % self.window_size
-        pad_g = (self.window_size - S % self.window_size) % self.window_size
-
-        x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-        _, Sp, Hp, Wp, _ = x.shape
-
-        # cyclic shift
-        if self.shift_size > 0:
-            shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
-            attn_mask = mask_matrix
-        else:
-            shifted_x = x
-            attn_mask = None
-       
-        # partition windows
-        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
-                                   C)  
 
         # W-MSA/SW-MSA
-        attn_windows = self.attn(x_windows, mask=attn_mask,pos_embed=None)  
+        x = self.attn(x)  
 
         # merge windows
-        attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
-        shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp) 
-
-        # reverse cyclic shift
-        if self.shift_size > 0:
-            x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size, self.shift_size), dims=(1, 2, 3))
-        else:
-            x = shifted_x
-
-        if pad_r > 0 or pad_b > 0 or pad_g > 0:
-            x = x[:, :S, :H, :W, :].contiguous()
-
         x = x.view(B, S * H * W, C)
 
         # FFN
@@ -398,6 +364,76 @@ class SwinTransformerBlock(nn.Module):
 
         return x
 
+class Mlp_re(nn.Module):
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
+        super().__init__()
+
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.act = act_layer()
+        self.drop = nn.Dropout(drop)
+        self.fc1 = nn.Conv3d(in_features, hidden_features, 1, 1)
+        self.fc2 = nn.Conv3d(hidden_features, out_features, 1, 1)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        x = self.drop(x)
+        return x   
+class PATM(nn.Module):
+    def __init__(self, dim, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.,mode='fc'):
+        super().__init__()
+        
+        
+        self.fc_h = nn.Conv3d(dim, dim, 1, 1,bias=qkv_bias)
+        self.fc_w = nn.Conv3d(dim, dim, 1, 1,bias=qkv_bias) 
+        self.fc_c = nn.Conv3d(dim, dim, 1, 1,bias=qkv_bias)
+        
+        self.tfc_h = nn.Conv3d(2*dim, dim, (1,1,7), stride=1, padding=(0,0,7//2), groups=dim, bias=False) 
+        self.tfc_w = nn.Conv3d(2*dim, dim, (7,1,1), stride=1, padding=(7//2,0,0), groups=dim, bias=False)  
+        self.reweight = Mlp_re(dim, dim // 4, dim * 3)
+        self.proj = nn.Conv3d(dim, dim, 1, 1,bias=True)
+        self.proj_drop = nn.Dropout(proj_drop)   
+        self.mode=mode
+        
+        if mode=='fc':
+            self.theta_h_conv=nn.Sequential(nn.Conv3d(dim, dim, 1, 1,bias=True),nn.BatchNorm3d(dim),nn.ReLU())
+            self.theta_w_conv=nn.Sequential(nn.Conv3d(dim, dim, 1, 1,bias=True),nn.BatchNorm3d(dim),nn.ReLU())  
+        else:
+            self.theta_h_conv=nn.Sequential(nn.Conv3d(dim, dim, 3, stride=1, padding=1, groups=dim, bias=False),nn.BatchNorm3d(dim),nn.ReLU())
+            self.theta_w_conv=nn.Sequential(nn.Conv3d(dim, dim, 3, stride=1, padding=1, groups=dim, bias=False),nn.BatchNorm3d(dim),nn.ReLU()) 
+                    
+
+
+    def forward(self, x):
+     
+        B, C, H, W, S = x.shape
+        
+        theta_h=self.theta_h_conv(x)
+        theta_w=self.theta_w_conv(x)
+
+        x_h=self.fc_h(x)
+        x_w=self.fc_w(x)      
+        x_h=torch.cat([x_h*torch.cos(theta_h),x_h*torch.sin(theta_h)],dim=1)
+        x_w=torch.cat([x_w*torch.cos(theta_w),x_w*torch.sin(theta_w)],dim=1)
+
+#         x_1=self.fc_h(x)
+#         x_2=self.fc_w(x)
+#         x_h=torch.cat([x_1*torch.cos(theta_h),x_2*torch.sin(theta_h)],dim=1)
+#         x_w=torch.cat([x_1*torch.cos(theta_w),x_2*torch.sin(theta_w)],dim=1)
+        
+        h = self.tfc_h(x_h)
+        w = self.tfc_w(x_w)
+        c = self.fc_c(x)
+        a = F.adaptive_avg_pool3d(h + w + c,output_size=1)
+        a = self.reweight(a).reshape(B, C, 3).permute(2, 0, 1).softmax(dim=0).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        x = h * a[0] + w * a[1] + c * a[2]
+        x = self.proj(x)
+        x = self.proj_drop(x)           
+        return x
+        
 
 class PatchMerging(nn.Module):
   
@@ -494,40 +530,19 @@ class BasicLayer(nn.Module):
       
 
         # calculate attention mask for SW-MSA
-        Sp = int(np.ceil(S / self.window_size)) * self.window_size
-        Hp = int(np.ceil(H / self.window_size)) * self.window_size
-        Wp = int(np.ceil(W / self.window_size)) * self.window_size
-        img_mask = torch.zeros((1, Sp, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
-        s_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        h_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        cnt = 0
-        for s in s_slices:
-            for h in h_slices:
-                for w in w_slices:
-                    img_mask[:, s, h, w, :] = cnt
-                    cnt += 1
-
-        mask_windows = window_partition(img_mask, self.window_size)  
-        mask_windows = mask_windows.view(-1,
-                                         self.window_size * self.window_size * self.window_size)  
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+       
+        
         for blk in self.blocks:
           
-            x = blk(x, attn_mask)
+            x = blk(x)
         if self.downsample is not None:
             x_down = self.downsample(x, S, H, W)
             Ws, Wh, Ww = (S + 1) // 2, (H + 1) // 2, (W + 1) // 2
             return x, S, H, W, x_down, Ws, Wh, Ww
         else:
             return x, S, H, W, x, S, H, W
+
+            
 
 class BasicLayer_up(nn.Module):
 
@@ -555,7 +570,7 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock_kv(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
@@ -595,35 +610,12 @@ class BasicLayer_up(nn.Module):
         x = x_up + skip
         S, H, W = S * 2, H * 2, W * 2
         # calculate attention mask for SW-MSA
-        Sp = int(np.ceil(S / self.window_size)) * self.window_size
-        Hp = int(np.ceil(H / self.window_size)) * self.window_size
-        Wp = int(np.ceil(W / self.window_size)) * self.window_size
-        img_mask = torch.zeros((1, Sp, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
-        s_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        h_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        cnt = 0
-        for s in s_slices:
-            for h in h_slices:
-                for w in w_slices:
-                    img_mask[:, s, h, w, :] = cnt
-                    cnt += 1
-
-        mask_windows = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1,
-                                         self.window_size * self.window_size * self.window_size)  # 3d��3��winds�˻�����Ŀ�Ǻܴ�ģ�����winds����̫��
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
+                 
+        
+        x = self.blocks[0](x)
         for i in range(self.depth-1):
-            x = self.blocks[i+1](x,attn_mask)
+            x = self.blocks[i+1](x)
         
         return x, S, H, W
         
