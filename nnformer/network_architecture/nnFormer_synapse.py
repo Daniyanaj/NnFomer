@@ -399,6 +399,140 @@ class SwinTransformerBlock(nn.Module):
         return x
 
 
+class FocalModulation(nn.Module):
+    """ Focal Modulation
+    Args:
+        dim (int): Number of input channels.
+        proj_drop (float, optional): Dropout ratio of output. Default: 0.0
+        focal_level (int): Number of focal levels
+        focal_window (int): Focal window size at focal level 1
+        focal_factor (int, default=2): Step to increase the focal window
+        use_postln (bool, default=False): Whether use post-modulation layernorm
+    """
+
+    def __init__(self, dim, proj_drop=0., focal_level=2, focal_window=7, focal_factor=2, use_postln=False):
+
+        super().__init__()
+        self.dim = dim
+
+        # specific args for focalv3
+        self.focal_level = focal_level
+        self.focal_window = focal_window
+        self.focal_factor = focal_factor
+        self.use_postln = use_postln
+
+        self.f = nn.Linear(dim, 2*dim+(self.focal_level+1), bias=True)
+        self.h = nn.Conv3d(dim, dim, kernel_size=1, stride=1, padding=0, groups=1, bias=True)
+
+        self.act = nn.GELU()
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+        self.focal_layers = nn.ModuleList()
+
+        if self.use_postln:
+            self.ln = nn.LayerNorm(dim)
+
+        for k in range(self.focal_level):
+            kernel_size = self.focal_factor*k + self.focal_window
+            self.focal_layers.append(
+                nn.Sequential(
+                    nn.Conv3d(dim, dim, kernel_size=kernel_size, stride=1, groups=dim, 
+                        padding=kernel_size//2, bias=False),
+                    nn.GELU(),
+                    )
+                )
+
+    def forward(self, x):
+        """ Forward function.
+        Args:
+            x: input features with shape of (B, H, W, C)
+        """
+        B, nH, nW,nS, C = x.shape
+        x = self.f(x)
+        x = x.permute(0, 3, 1, 2).contiguous()
+        q, ctx, gates = torch.split(x, (C, C,C, self.focal_level+1), 1)
+        
+        ctx_all = 0
+        for l in range(self.focal_level):                     
+            ctx = self.focal_layers[l](ctx)
+            ctx_all = ctx_all + ctx*gates[:, l:l+1]
+        ctx_global = self.act(ctx.mean(2, keepdim=True).mean(3, keepdim=True))
+        ctx_all = ctx_all + ctx_global*gates[:,self.focal_level:]
+
+        x_out = q * self.h(ctx_all)
+        x_out = x_out.permute(0, 2, 3, 1).contiguous()
+        if self.use_postln:
+            x_out = self.ln(x_out)            
+        x_out = self.proj(x_out)
+        x_out = self.proj_drop(x_out)
+        return x_out
+
+class FocalModulationBlock(nn.Module):
+    """ Focal Modulation Block.
+    Args:
+        dim (int): Number of input channels.
+        mlp_ratio (float): Ratio of mlp hidden dim to embedding dim.
+        drop (float, optional): Dropout rate. Default: 0.0
+        drop_path (float, optional): Stochastic depth rate. Default: 0.0
+        act_layer (nn.Module, optional): Activation layer. Default: nn.GELU
+        norm_layer (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
+        focal_level (int): number of focal levels
+        focal_window (int): focal kernel size at level 1
+    """
+
+    def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., 
+                 act_layer=nn.GELU, norm_layer=nn.LayerNorm,
+                 focal_level=2, focal_window=9, use_layerscale=False, layerscale_value=1e-4):
+        super().__init__()
+        self.dim = dim
+        self.mlp_ratio = mlp_ratio
+        self.focal_window = focal_window
+        self.focal_level = focal_level
+        self.use_layerscale = use_layerscale
+
+        self.norm1 = norm_layer(dim)
+        self.modulation = FocalModulation(
+            dim, focal_window=self.focal_window, focal_level=self.focal_level, proj_drop=drop
+        )            
+
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.norm2 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+
+        self.H = None
+        self.W = None
+        self.S=None
+
+        self.gamma_1 = 1.0
+        self.gamma_2 = 1.0
+        if self.use_layerscale:
+            self.gamma_1 = nn.Parameter(layerscale_value * torch.ones((dim)), requires_grad=True)
+            self.gamma_2 = nn.Parameter(layerscale_value * torch.ones((dim)), requires_grad=True)   
+
+    def forward(self, x):
+        """ Forward function.
+        Args:
+            x: Input feature, tensor size (B, H*W, C).
+            H, W: Spatial resolution of the input feature.
+        """
+        B, L, C = x.shape
+        H, W , S= self.H, self.W, self.S
+        assert L == H * W*S, "input feature has wrong size"
+
+        shortcut = x
+        x = self.norm1(x)
+        x = x.view(B, H, W,S, C)
+        
+        # FM
+        x = self.modulation(x).view(B, H * W*S, C)
+
+        # FFN
+        x = shortcut + self.drop_path(self.gamma_1 * x)
+        x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
+
+        return x
+
 class PatchMerging(nn.Module):
   
 
@@ -465,24 +599,23 @@ class BasicLayer(nn.Module):
                  ):
         super().__init__()
         self.window_size = window_size
+        self.focal_window=window_size
         self.shift_size = window_size // 2
         self.depth = depth
         # build blocks
         
         self.blocks = nn.ModuleList([
-            SwinTransformerBlock(
+            FocalModulationBlock(
                 dim=dim,
-                input_resolution=input_resolution,
-                num_heads=num_heads,
-                window_size=window_size,
-                shift_size=0 if (i % 2 == 0) else window_size // 2,
                 mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                qk_scale=qk_scale,
                 drop=drop,
-                attn_drop=attn_drop,
-                drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+                drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
+                focal_window=window_size, 
+                focal_level=depth, 
+                use_layerscale=use_layerscale, 
+                norm_layer=norm_layer)
             for i in range(depth)])
+             
 
         # patch merging layer
         if downsample is not None:
@@ -494,34 +627,10 @@ class BasicLayer(nn.Module):
       
 
         # calculate attention mask for SW-MSA
-        Sp = int(np.ceil(S / self.window_size)) * self.window_size
-        Hp = int(np.ceil(H / self.window_size)) * self.window_size
-        Wp = int(np.ceil(W / self.window_size)) * self.window_size
-        img_mask = torch.zeros((1, Sp, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
-        s_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        h_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        cnt = 0
-        for s in s_slices:
-            for h in h_slices:
-                for w in w_slices:
-                    img_mask[:, s, h, w, :] = cnt
-                    cnt += 1
-
-        mask_windows = window_partition(img_mask, self.window_size)  
-        mask_windows = mask_windows.view(-1,
-                                         self.window_size * self.window_size * self.window_size)  
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        
         for blk in self.blocks:
           
-            x = blk(x, attn_mask)
+            x = blk(x)
         if self.downsample is not None:
             x_down = self.downsample(x, S, H, W)
             Ws, Wh, Ww = (S + 1) // 2, (H + 1) // 2, (W + 1) // 2
@@ -544,46 +653,43 @@ class BasicLayer_up(nn.Module):
                  attn_drop=0.,
                  drop_path=0.,
                  norm_layer=nn.LayerNorm,
+                 use_layerscale=True,
                  upsample=True
                 ):
         super().__init__()
         self.window_size = window_size
         self.shift_size = window_size // 2
         self.depth = depth
+        self.use_layerscale=use_layerscale
         
 
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock_kv(
-                    dim=dim,
-                    input_resolution=input_resolution,
-                    num_heads=num_heads,
-                    window_size=window_size,
-                    shift_size=0 ,
-                    mlp_ratio=mlp_ratio,
-                    qkv_bias=qkv_bias,
-                    qk_scale=qk_scale,
-                    drop=drop,
-                    attn_drop=attn_drop,
-                    drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-                    )
+            FocalModulationBlock(
+                dim=dim,
+                mlp_ratio=mlp_ratio,
+                drop=drop,
+                drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
+                focal_window=focal_window, 
+                focal_level=focal_level, 
+                use_layerscale=use_layerscale, 
+                norm_layer=norm_layer))
+            
+             
         for i in range(depth-1):
             self.blocks.append(
-                SwinTransformerBlock(
-                        dim=dim,
-                        input_resolution=input_resolution,
-                        num_heads=num_heads,
-                        window_size=window_size,
-                        shift_size=window_size // 2 ,
-                        mlp_ratio=mlp_ratio,
-                        qkv_bias=qkv_bias,
-                        qk_scale=qk_scale,
-                        drop=drop,
-                        attn_drop=attn_drop,
-                        drop_path=drop_path[i+1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-                        )
-        
+                FocalModulationBlock(
+                dim=dim,
+                mlp_ratio=mlp_ratio,
+                drop=drop,
+                drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
+                focal_window=focal_window, 
+                focal_level=focal_level, 
+                use_layerscale=use_layerscale, 
+                norm_layer=norm_layer)
+            )
+             
 
         
         self.Upsample = upsample(dim=2*dim, norm_layer=norm_layer)
@@ -595,35 +701,12 @@ class BasicLayer_up(nn.Module):
         x = x_up + skip
         S, H, W = S * 2, H * 2, W * 2
         # calculate attention mask for SW-MSA
-        Sp = int(np.ceil(S / self.window_size)) * self.window_size
-        Hp = int(np.ceil(H / self.window_size)) * self.window_size
-        Wp = int(np.ceil(W / self.window_size)) * self.window_size
-        img_mask = torch.zeros((1, Sp, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
-        s_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        h_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        cnt = 0
-        for s in s_slices:
-            for h in h_slices:
-                for w in w_slices:
-                    img_mask[:, s, h, w, :] = cnt
-                    cnt += 1
-
-        mask_windows = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1,
-                                         self.window_size * self.window_size * self.window_size)  # 3d��3��winds�˻�����Ŀ�Ǻܴ�ģ�����winds����̫��
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
+        
+        
+        x = self.blocks[0](x)
         for i in range(self.depth-1):
-            x = self.blocks[i+1](x,attn_mask)
+            x = self.blocks[i+1](x)
         
         return x, S, H, W
         
@@ -719,7 +802,8 @@ class Encoder(nn.Module):
                  drop_path_rate=0.2,
                  norm_layer=nn.LayerNorm,
                  patch_norm=True,
-                 out_indices=(0, 1, 2, 3)
+                 out_indices=(0, 1, 2, 3),
+                 use_layerscale=True
                  ):
         super().__init__()
 
@@ -729,6 +813,7 @@ class Encoder(nn.Module):
         self.embed_dim = embed_dim
         self.patch_norm = patch_norm
         self.out_indices = out_indices
+        self.use_layerscale=use_layerscale
 
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
@@ -761,6 +846,7 @@ class Encoder(nn.Module):
                 drop_path=dpr[sum(
                     depths[:i_layer]):sum(depths[:i_layer + 1])],
                 norm_layer=norm_layer,
+                use_layerscale=use_layerscale,
                 downsample=PatchMerging
                 if (i_layer < self.num_layers - 1) else None
                 )
@@ -898,7 +984,8 @@ class nnFormer(SegmentationNetwork):
                 num_heads=[6, 12, 24, 48],
                 patch_size=[2,4,4],
                 window_size=[4,4,8,4],
-                deep_supervision=True):
+                deep_supervision=True,
+                use_layerscale=True):
       
         super(nnFormer, self).__init__()
         
@@ -907,6 +994,7 @@ class nnFormer(SegmentationNetwork):
         self.do_ds = deep_supervision
         self.num_classes=num_classes
         self.conv_op=conv_op
+        self.use_layerscale=use_layerscale
        
         
         self.upscale_logits_ops = []
@@ -919,7 +1007,8 @@ class nnFormer(SegmentationNetwork):
         num_heads=num_heads
         patch_size=patch_size
         window_size=window_size
-        self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
+        
+        self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,use_layerscale=u,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
         self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
         
         self.final=[]
