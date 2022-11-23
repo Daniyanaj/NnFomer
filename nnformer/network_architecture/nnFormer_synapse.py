@@ -433,7 +433,7 @@ class FocalModulation(nn.Module):
             self.ln = nn.LayerNorm(dim)
 
         for k in range(self.focal_level):
-            kernel_size = self.focal_factor*k + self.focal_window
+            kernel_size = self.focal_factor*k + self.focal_window+1
             self.focal_layers.append(
                 nn.Sequential(
                     nn.Conv3d(dim, dim, kernel_size=kernel_size, stride=1, groups=dim, 
@@ -449,8 +449,8 @@ class FocalModulation(nn.Module):
         """
         B, nH, nW,nS, C = x.shape
         x = self.f(x)
-        x = x.permute(0, 3, 1, 2).contiguous()
-        q, ctx, gates = torch.split(x, (C, C,C, self.focal_level+1), 1)
+        x = x.permute(0, 4, 1, 2,3).contiguous()
+        q, ctx, gates = torch.split(x, (C, C, 2+1), 1)
         
         ctx_all = 0
         for l in range(self.focal_level):                     
@@ -460,7 +460,7 @@ class FocalModulation(nn.Module):
         ctx_all = ctx_all + ctx_global*gates[:,self.focal_level:]
 
         x_out = q * self.h(ctx_all)
-        x_out = x_out.permute(0, 2, 3, 1).contiguous()
+        x_out = x_out.permute(0, 2, 3, 4, 1).contiguous()
         if self.use_postln:
             x_out = self.ln(x_out)            
         x_out = self.proj(x_out)
@@ -517,7 +517,8 @@ class FocalModulationBlock(nn.Module):
             H, W: Spatial resolution of the input feature.
         """
         B, L, C = x.shape
-        H, W , S= self.H, self.W, self.S
+        H=W=S= int(round((L)**(1/3)))
+        #H, W , S= self.H, self.W, self.S
         assert L == H * W*S, "input feature has wrong size"
 
         shortcut = x
@@ -612,7 +613,7 @@ class BasicLayer(nn.Module):
                 drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
                 focal_window=window_size, 
                 focal_level=depth, 
-                use_layerscale=use_layerscale, 
+                use_layerscale=True, 
                 norm_layer=norm_layer)
             for i in range(depth)])
              
@@ -670,10 +671,10 @@ class BasicLayer_up(nn.Module):
                 dim=dim,
                 mlp_ratio=mlp_ratio,
                 drop=drop,
-                drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
-                focal_window=focal_window, 
-                focal_level=focal_level, 
-                use_layerscale=use_layerscale, 
+                drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path,
+                focal_window=window_size, 
+                focal_level=depth, 
+                use_layerscale=True, 
                 norm_layer=norm_layer))
             
              
@@ -684,9 +685,9 @@ class BasicLayer_up(nn.Module):
                 mlp_ratio=mlp_ratio,
                 drop=drop,
                 drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
-                focal_window=focal_window, 
-                focal_level=focal_level, 
-                use_layerscale=use_layerscale, 
+                focal_window=window_size, 
+                focal_level=depth, 
+                use_layerscale=True, 
                 norm_layer=norm_layer)
             )
              
@@ -846,7 +847,6 @@ class Encoder(nn.Module):
                 drop_path=dpr[sum(
                     depths[:i_layer]):sum(depths[:i_layer + 1])],
                 norm_layer=norm_layer,
-                use_layerscale=use_layerscale,
                 downsample=PatchMerging
                 if (i_layer < self.num_layers - 1) else None
                 )
@@ -1008,7 +1008,7 @@ class nnFormer(SegmentationNetwork):
         patch_size=patch_size
         window_size=window_size
         
-        self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,use_layerscale=u,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
+        self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
         self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
         
         self.final=[]
