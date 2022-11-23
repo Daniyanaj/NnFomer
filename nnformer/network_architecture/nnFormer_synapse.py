@@ -13,6 +13,81 @@ import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 from timm.models.layers import DropPath, to_3tuple, trunc_normal_
 
+
+from torch.nn import init
+
+
+
+class ChannelAttention(nn.Module):
+    def __init__(self,channel,reduction=2):
+        super().__init__()
+        self.maxpool=nn.AdaptiveMaxPool3d(1)
+        self.avgpool=nn.AdaptiveAvgPool3d(1)
+        self.se=nn.Sequential(
+            nn.Conv3d(channel,channel//reduction,1,bias=False),
+            nn.ReLU(),
+            nn.Conv3d(channel//reduction,channel,1,bias=False)
+        )
+        self.sigmoid=nn.Sigmoid()
+    
+    def forward(self, x) :
+        max_result=self.maxpool(x)
+        avg_result=self.avgpool(x)
+        max_out=self.se(max_result)
+        avg_out=self.se(avg_result)
+        output=self.sigmoid(max_out+avg_out)
+        return output
+
+class SpatialAttention(nn.Module):
+    def __init__(self,kernel_size=7):
+        super().__init__()
+        self.conv=nn.Conv3d(2,1,kernel_size=kernel_size,padding=kernel_size//2)
+        self.sigmoid=nn.Sigmoid()
+    
+    def forward(self, x) :
+        max_result,_=torch.max(x,dim=1,keepdim=True)
+        avg_result=torch.mean(x,dim=1,keepdim=True)
+        result=torch.cat([max_result,avg_result],1)
+        output=self.conv(result)
+        output=self.sigmoid(output)
+        return output
+
+
+
+class CBAMBlock(nn.Module):
+
+    def __init__(self, channel=512,reduction=16,kernel_size=49):
+        super().__init__()
+        self.ca=ChannelAttention(channel=channel,reduction=reduction)
+        self.sa=SpatialAttention(kernel_size=kernel_size)
+
+
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv3d):
+                init.kaiming_normal_(m.weight, mode='fan_out')
+                if m.bias is not None:
+                    init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm3d):
+                init.constant_(m.weight, 1)
+                init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                init.normal_(m.weight, std=0.001)
+                if m.bias is not None:
+                    init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        b,l,c=x.shape
+        h=w=s=int(round((l)**(1/3)))
+        x = x.view(b,c,h,w,s)
+        residual=x
+        out=x*self.ca(x)
+        out=out*self.sa(out)
+        out= out+residual
+        out=out.view(b,l,c)
+        return out
+
+
 class ContiguousGrad(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x):
@@ -468,7 +543,7 @@ class BasicLayer(nn.Module):
         self.shift_size = window_size // 2
         self.depth = depth
         # build blocks
-        
+        self.mb = CBAMBlock(channel=dim,reduction=2,kernel_size=3)
         self.blocks = nn.ModuleList([
             SwinTransformerBlock(
                 dim=dim,
@@ -522,6 +597,7 @@ class BasicLayer(nn.Module):
         for blk in self.blocks:
           
             x = blk(x, attn_mask)
+        x=self.mb(x)    
         if self.downsample is not None:
             x_down = self.downsample(x, S, H, W)
             Ws, Wh, Ww = (S + 1) // 2, (H + 1) // 2, (W + 1) // 2
@@ -554,6 +630,7 @@ class BasicLayer_up(nn.Module):
 
         # build blocks
         self.blocks = nn.ModuleList()
+        self.mb = CBAMBlock(channel=dim,reduction=2,kernel_size=3)
         self.blocks.append(
             SwinTransformerBlock_kv(
                     dim=dim,
@@ -624,6 +701,7 @@ class BasicLayer_up(nn.Module):
         x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x,attn_mask)
+        x=self.mb(x)      
         
         return x, S, H, W
         
