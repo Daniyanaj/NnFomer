@@ -433,10 +433,10 @@ class FocalModulation(nn.Module):
             self.ln = nn.LayerNorm(dim)
 
         for k in range(self.focal_level):
-            kernel_size = self.focal_factor*k + self.focal_window+1
+            kernel_size = self.focal_factor*k + self.focal_window-1
             self.focal_layers.append(
                 nn.Sequential(
-                    nn.Conv3d(dim, dim, kernel_size=kernel_size, stride=1, 
+                    nn.Conv3d(dim, dim, kernel_size=kernel_size, stride=1, groups=dim,
                         padding=kernel_size//2, bias=False),
                     nn.GELU(),
                     )
@@ -453,7 +453,9 @@ class FocalModulation(nn.Module):
         q, ctx, gates = torch.split(x, (C, C, 2+1), 1)
         
         ctx_all = 0
-        for l in range(self.focal_level):                     
+        for l in range(1):
+            a,b,c,d,e=ctx.shape                    
+        
             ctx = self.focal_layers[l](ctx)
             ctx_all = ctx_all + ctx*gates[:, l:l+1]
         ctx_global = self.act(ctx.mean(2, keepdim=True).mean(3, keepdim=True))
