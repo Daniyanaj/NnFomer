@@ -173,6 +173,11 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
                                 patch_size=self.embedding_patch_size,
                                 window_size=self.window_size,
                                 deep_supervision=self.deep_supervision)
+
+        ml=self.network             
+        
+        pytorch_total_params = sum(p.numel() for p in ml.parameters() if p.requires_grad)
+        print("Total parameters count", pytorch_total_params)           
         #if self.load_pretrain_weight:
             #checkpoint = torch.load('/home/xychen/jsguo/weight/gelunorm_former_skip_global_shift.model', map_location='cpu')
             #self.network.load_state_dict(checkpoint)
