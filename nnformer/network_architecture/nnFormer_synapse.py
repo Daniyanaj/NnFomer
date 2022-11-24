@@ -250,12 +250,13 @@ class Resblock(nn.Module):
     def __init__(self, dim=32, hidden_dim=128, act_layer=nn.GELU,drop = 0.):
         super(Resblock, self).__init__()
         self.linear1 = self.conv1=nn.Conv3d(dim, dim//2, 3, stride=1, padding=1, dilation=1)
-        self.linear2 = self.conv2=nn.Conv3d(dim//2, dim, 3, stride=1,padding=3,dilation=3)
-        self.norm=nn.BatchNorm3d(dim)
+        #self.linear2 = self.conv2=nn.Conv3d(dim//2, dim, 3, stride=1,padding=3,dilation=3)
+        #self.avg=nn.AvgPool3d(3,stride=2)
+        self.norm=nn.BatchNorm3d(dim//2)
         self.block = nn.Sequential(
             # pw
-            nn.Conv3d(dim//2, dim//2, 3, stride=1, padding=5,dilation=5,groups=dim//2),
-            nn.BatchNorm3d(dim//2),
+            nn.Conv3d(dim//2, dim, 3, stride=1, padding=5,dilation=5,groups=dim//2),
+            nn.BatchNorm3d(dim),
             # dw
             #_DWConv(hidden_dim, hidden_dim, 1),
             act_layer()
@@ -269,12 +270,14 @@ class Resblock(nn.Module):
         
         # spatial restore
         x = rearrange(x, ' b (h w s) (c) -> b c h w s ', h = hh, w = hh, s=hh).contiguous()
+        
         x = self.linear1(x)
-        x =x+self.block(x)
+        x=self.norm(x)
+        x =self.block(x)
         # flaten
         
-        x = self.linear2(x)
-        x=self.norm(x)
+        #x = self.linear2(x)
+        
         x = rearrange(x, ' b c h w s-> b (h w s) c', h = hh, w = hh, s=hh).contiguous()
         return x
         
