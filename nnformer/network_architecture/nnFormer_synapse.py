@@ -13,6 +13,228 @@ import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 from timm.models.layers import DropPath, to_3tuple, trunc_normal_
 
+
+def exists(val):
+    return val is not None
+
+def default(val, d):
+    return val if exists(val) else d
+
+def divisible_by(numer, denom):
+    return (numer % denom) == 0
+
+def cast_tuple(x, length = 1):
+    return x if isinstance(x, tuple) else ((x,) * 2)
+
+# tensor helpers
+
+def create_grid_like(t, dim = 0):
+    f, h, w, device = *t.shape[-3:], t.device
+
+    grid = torch.stack(torch.meshgrid(
+        torch.arange(f, device = device),
+        torch.arange(h, device = device),
+        torch.arange(w, device = device),
+    indexing = 'ij'), dim = dim)
+
+    grid.requires_grad = False
+    grid = grid.type_as(t)
+    return grid
+
+def normalize_grid(grid, dim = 1, out_dim = -1):
+    # normalizes a grid to range from -1 to 1
+    f, h, w = grid.shape[-3:]
+    grid_f, grid_h, grid_w = grid.unbind(dim = dim)
+
+    grid_f = 2.0 * grid_f / max(f - 1, 1) - 1.0
+    grid_h = 2.0 * grid_h / max(h - 1, 1) - 1.0
+    grid_w = 2.0 * grid_w / max(w - 1, 1) - 1.0
+
+    return torch.stack((grid_f, grid_h, grid_w), dim = out_dim)
+
+class Scale(nn.Module):
+    def __init__(self, scale):
+        super().__init__()
+        self.register_buffer('scale', torch.tensor(scale, dtype = torch.float32))
+
+    def forward(self, x):
+        return x * rearrange(self.scale, 'c -> 1 c 1 1 1')
+
+# continuous positional bias from SwinV2
+
+class CPB(nn.Module):
+    """ https://arxiv.org/abs/2111.09883v1 """
+
+    def __init__(self, dim, *, heads, offset_groups, depth):
+        super().__init__()
+        self.heads = heads
+        self.offset_groups = offset_groups
+
+        self.mlp = nn.ModuleList([])
+
+        self.mlp.append(nn.Sequential(
+            nn.Linear(3, dim),
+            nn.ReLU()
+        ))
+
+        for _ in range(depth - 1):
+            self.mlp.append(nn.Sequential(
+                nn.Linear(dim, dim),
+                nn.ReLU()
+            ))
+
+        self.mlp.append(nn.Linear(dim, heads // offset_groups))
+
+    def forward(self, grid_q, grid_kv):
+        device, dtype = grid_q.device, grid_kv.dtype
+
+        grid_q = rearrange(grid_q, '... c -> 1 (...) c')
+        grid_kv = rearrange(grid_kv, 'b ... c -> b (...) c')
+
+        pos = rearrange(grid_q, 'b i c -> b i 1 c') - rearrange(grid_kv, 'b j c -> b 1 j c')
+        bias = torch.sign(pos) * torch.log(pos.abs() + 1)  # log of distance is sign(rel_pos) * log(abs(rel_pos) + 1)
+
+        for layer in self.mlp:
+            bias = layer(bias)
+
+        bias = rearrange(bias, '(b g) i j o -> b (g o) i j', g = self.offset_groups)
+
+        return bias
+
+# main class
+
+class DeformableAttention3D(nn.Module):
+    def __init__(
+        self,
+        *,
+        dim,
+        dim_head = 64,
+        heads = 8,
+        dropout = 0.,
+        downsample_factor = 4,
+        offset_scale = None,
+        offset_groups = None,
+        offset_kernel_size = 6,
+        group_queries = True,
+        group_key_values = True
+    ):
+        super().__init__()
+        # downsample_factor = cast_tuple(downsample_factor, length = 3)
+        downsample_factor =(4,4,4)
+        offset_scale = default(offset_scale, downsample_factor)
+        offset_kernel_size=(6,6,6)
+        offset_conv_padding = tuple(map(lambda x: (x[0] - x[1]) / 2, zip(offset_kernel_size, downsample_factor)))
+        assert all([(padding > 0 and padding.is_integer()) for padding in offset_conv_padding])
+
+        offset_groups = default(offset_groups, heads)
+        assert divisible_by(heads, offset_groups)
+
+        inner_dim = dim_head * heads
+        self.scale = dim_head ** -0.5
+        self.heads = heads
+        self.offset_groups = offset_groups
+
+        offset_dims = inner_dim // offset_groups
+
+        self.downsample_factor = downsample_factor
+
+        self.to_offsets = nn.Sequential(
+            nn.Conv3d(offset_dims, offset_dims, offset_kernel_size, groups = offset_dims, stride = downsample_factor, padding = tuple(map(int, offset_conv_padding))),
+            nn.GELU(),
+            nn.Conv3d(offset_dims, 3, 1, bias = False),
+            nn.Tanh(),
+            Scale(offset_scale)
+        )
+
+        self.rel_pos_bias = CPB(dim // 4, offset_groups = offset_groups, heads = heads, depth = 2)
+
+        self.dropout = nn.Dropout(dropout)
+        self.to_q = nn.Conv3d(dim, inner_dim, 1, groups = offset_groups if group_queries else 1, bias = False)
+        self.to_k = nn.Conv3d(dim, inner_dim, 1, groups = offset_groups if group_key_values else 1, bias = False)
+        self.to_v = nn.Conv3d(dim, inner_dim, 1, groups = offset_groups if group_key_values else 1, bias = False)
+        self.to_out = nn.Conv3d(inner_dim, dim, 1)
+
+    def forward(self, x, return_vgrid = False):
+        """
+        b - batch
+        h - heads
+        f - frames
+        x - height
+        y - width
+        d - dimension
+        g - offset groups
+        """
+
+        heads, b, f, h, w, downsample_factor, device = self.heads, x.shape[0], *x.shape[-3:], self.downsample_factor, x.device
+
+        # queries
+
+        q = self.to_q(x)
+
+        # calculate offsets - offset MLP shared across all groups
+
+        group = lambda t: rearrange(t, 'b (g d) ... -> (b g) d ...', g = self.offset_groups)
+
+        grouped_queries = group(q)
+        offsets = self.to_offsets(grouped_queries)
+
+        # calculate grid + offsets
+
+        grid = create_grid_like(offsets)
+        vgrid = grid + offsets
+
+        vgrid_scaled = normalize_grid(vgrid)
+
+        kv_feats = F.grid_sample(
+            group(x),
+            vgrid_scaled,
+        mode = 'bilinear', padding_mode = 'zeros', align_corners = False)
+
+        kv_feats = rearrange(kv_feats, '(b g) d ... -> b (g d) ...', b = b)
+
+        # derive key / values
+
+        k, v = self.to_k(kv_feats), self.to_v(kv_feats)
+
+        # scale queries
+
+        q = q * self.scale
+
+        # split out heads
+
+        q, k, v = map(lambda t: rearrange(t, 'b (h d) ... -> b h (...) d', h = heads), (q, k, v))
+
+        # query / key similarity
+
+        sim = einsum('b h i d, b h j d -> b h i j', q, k)
+
+        # relative positional bias
+
+        grid = create_grid_like(x)
+        grid_scaled = normalize_grid(grid, dim = 0)
+        rel_pos_bias = self.rel_pos_bias(grid_scaled, vgrid_scaled)
+        sim = sim + rel_pos_bias
+
+        # numerical stability
+
+        sim = sim - sim.amax(dim = -1, keepdim = True).detach()
+
+        # attention
+
+        attn = sim.softmax(dim = -1)
+        attn = self.dropout(attn)
+
+        # aggregate and combine heads
+
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = rearrange(out, 'b h (f x y) d -> b (h d) f x y', f = f, x = h, y = w)
+        out = self.to_out(out)
+
+        if return_vgrid:
+            return out, vgrid
+
+        return out
+
 class ContiguousGrad(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x):
@@ -30,7 +252,7 @@ class Mlp(nn.Module):
         hidden_features = hidden_features or in_features
         self.fc1 = nn.Linear(in_features, hidden_features)
         self.act = act_layer()
-        self.fc2 = nn.Linear(hidden_features, out_features)
+        self.fc2 = nn.Linear(hidden_features, in_features)
         self.drop = nn.Dropout(drop)
 
     def forward(self, x):
@@ -319,21 +541,19 @@ class SwinTransformerBlock(nn.Module):
         self.shift_size = shift_size
         self.mlp_ratio = mlp_ratio
    
-        if min(self.input_resolution) <= self.window_size:
-            # if window size is larger than input resolution, we don't partition windows
-            self.shift_size = 0
-            self.window_size = min(self.input_resolution)
-
-        assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
+        #tokens_dim, channels_dim = [int(x * dim) for x in to_3tuple(mlp_ratio)]
 
         self.norm1 = norm_layer(dim)
         
-        self.attn = WindowAttention(
-            dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
-            qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
-       
+        # self.attn = WindowAttention(
+        #     dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
+        #     qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
+        #self.attn=DeformableAttention3D(dim=dim)
             
-
+        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_3 = Mlp(in_features=8, hidden_features=8, act_layer=act_layer, drop=drop)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
@@ -343,54 +563,30 @@ class SwinTransformerBlock(nn.Module):
     def forward(self, x, mask_matrix):
 
         B, L, C = x.shape
+        # if L=32768:
+        #     i=8
+        #     mlp=self.mlp_tokens 
+        if L==4096:
+            i=1
+            mlp=self.mlp_tokens 
+        elif L==512:
+            i=1
+            mlp= self.mlp_tokens_1
+        elif L==64:
+            i=1
+            mlp=self.mlp_tokens_2    
+        else:
+            mlp=self.mlp_tokens_3
 
-        S, H, W = self.input_resolution
+        # S=H=W = self.input_resolution[0]//2
    
-        assert L == S * H * W, "input feature has wrong size"
+        # assert L == S * H * W, "input feature has wrong size"
         
         
         shortcut = x
-        x = self.norm1(x)
-        x = x.view(B, S, H, W, C)
-
-        # pad feature maps to multiples of window size
-        pad_r = (self.window_size - W % self.window_size) % self.window_size
-        pad_b = (self.window_size - H % self.window_size) % self.window_size
-        pad_g = (self.window_size - S % self.window_size) % self.window_size
-
-        x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-        _, Sp, Hp, Wp, _ = x.shape
-
-        # cyclic shift
-        if self.shift_size > 0:
-            shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
-            attn_mask = mask_matrix
-        else:
-            shifted_x = x
-            attn_mask = None
-       
-        # partition windows
-        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
-                                   C)  
-
-        # W-MSA/SW-MSA
-        attn_windows = self.attn(x_windows, mask=attn_mask,pos_embed=None)  
-
-        # merge windows
-        attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
-        shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp) 
-
-        # reverse cyclic shift
-        if self.shift_size > 0:
-            x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size, self.shift_size), dims=(1, 2, 3))
-        else:
-            x = shifted_x
-
-        if pad_r > 0 or pad_b > 0 or pad_g > 0:
-            x = x[:, :S, :H, :W, :].contiguous()
-
-        x = x.view(B, S * H * W, C)
+        x = self.norm1(x).transpose(1, 2)
+        x= mlp(x).transpose(1, 2)
+         
 
         # FFN
         x = shortcut + self.drop_path(x)
@@ -555,7 +751,7 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock_kv(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
@@ -621,7 +817,7 @@ class BasicLayer_up(nn.Module):
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
+        x = self.blocks[0](x, attn_mask)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x,attn_mask)
         
@@ -663,15 +859,15 @@ class project(nn.Module):
 
 class PatchEmbed(nn.Module):
 
-    def __init__(self, patch_size=4, in_chans=4, embed_dim=96, norm_layer=None):
+    def __init__(self, patch_size=8, in_chans=4, embed_dim=96, norm_layer=None):
         super().__init__()
-        patch_size = to_3tuple(patch_size)
+        patch_size = (8,8,8)
         self.patch_size = patch_size
 
         self.in_chans = in_chans
         self.embed_dim = embed_dim
-        stride1=[patch_size[0],patch_size[1]//2,patch_size[2]//2]
-        stride2=[patch_size[0]//2,patch_size[1]//2,patch_size[2]//2]
+        stride1=[patch_size[0]//2,patch_size[1]//4,patch_size[2]//4]
+        stride2=[patch_size[0]//8,patch_size[1]//2,patch_size[2]//2]
         self.proj1 = project(in_chans,embed_dim//2,stride1,1,nn.GELU,nn.LayerNorm,False)
         self.proj2 = project(embed_dim//2,embed_dim,stride2,1,nn.GELU,nn.LayerNorm,True)
         if norm_layer is not None:
@@ -874,7 +1070,7 @@ class Decoder(nn.Module):
 class final_patch_expanding(nn.Module):
     def __init__(self,dim,num_class,patch_size):
         super().__init__()
-        self.up=nn.ConvTranspose3d(dim,num_class,patch_size,patch_size)
+        self.up=nn.ConvTranspose3d(dim,num_class,[4,8,8],[4,8,8])
       
     def forward(self,x):
         x=x.permute(0,4,1,2,3).contiguous()
@@ -896,7 +1092,7 @@ class nnFormer(SegmentationNetwork):
                 conv_op=nn.Conv3d, 
                 depths=[2,2,2,2],
                 num_heads=[6, 12, 24, 48],
-                patch_size=[2,4,4],
+                patch_size=[4,8,8],
                 window_size=[4,4,8,4],
                 deep_supervision=True):
       
