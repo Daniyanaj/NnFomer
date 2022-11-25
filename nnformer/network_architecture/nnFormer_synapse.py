@@ -231,6 +231,146 @@ class WindowAttention_kv(nn.Module):
         x = self.proj_drop(x)
         return x
 
+
+
+class SE(nn.Module):
+    """
+    Squeeze and excitation block
+    """
+
+    def __init__(self,
+                 inp,
+                 oup,
+                 expansion=0.25):
+        """
+        Args:
+            inp: input features dimension.
+            oup: output features dimension.
+            expansion: expansion ratio.
+        """
+
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool3d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(oup, int(inp * expansion), bias=False),
+            nn.GELU(),
+            nn.Linear(int(inp * expansion), oup, bias=False),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        b, c, _, _,_ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1,1)
+        return x * y
+
+
+class FeatExtract(nn.Module):
+    """
+    Feature extraction block based on: "Hatamizadeh et al.,
+    Global Context Vision Transformers <https://arxiv.org/abs/2206.09959>"
+    """
+
+    def __init__(self, dim, keep_dim=False):
+        """
+        Args:
+            dim: feature size dimension.
+            keep_dim: bool argument for maintaining the resolution.
+        """
+
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv3d(dim, dim, 3, 1, 1,
+                      groups=dim, bias=False),
+            nn.GELU(),
+            SE(dim, dim),
+            nn.Conv3d(dim, dim, 1, 1, 0, bias=False),
+        )
+        if not keep_dim:
+            self.pool = nn.MaxPool3d(kernel_size=3, stride=2, padding=1)
+        self.keep_dim = keep_dim
+
+    def forward(self, x):
+        x = x.contiguous()
+        x = x + self.conv(x)
+        a,b,c,d,e=x.shape 
+        # if d==8:
+        #     self.keep_dim= True
+        if self.keep_dim==False:
+            
+            x = self.pool(x)
+        return x
+
+class GlobalQueryGen(nn.Module):
+    """
+    Global query generator based on: "Hatamizadeh et al.,
+    Global Context Vision Transformers <https://arxiv.org/abs/2206.09959>"
+    """
+
+    def __init__(self,
+                 dim,
+                 input_resolution,
+                 image_resolution,
+                 window_size,
+                 num_heads):
+        """
+        Args:
+            dim: feature size dimension.
+            input_resolution: input image resolution.
+            window_size: window size.
+            num_heads: number of heads.
+        For instance, repeating log(56/7) = 3 blocks, with input window dimension 56 and output window dimension 7 at
+        down-sampling ratio 2. Please check Fig.5 of GC ViT paper for details.
+        """
+
+        super().__init__()
+        if input_resolution[0] == image_resolution//4:
+            self.to_q_global = nn.Sequential(
+                FeatExtract(dim, keep_dim=False),
+                FeatExtract(dim, keep_dim=False),
+                FeatExtract(dim, keep_dim=False),
+            )
+
+        elif input_resolution[0] == image_resolution//8:
+            self.to_q_global = nn.Sequential(
+                FeatExtract(dim, keep_dim=False),
+                FeatExtract(dim, keep_dim=False),
+            )
+
+        elif input_resolution[0] == image_resolution//16:
+
+            if window_size == input_resolution:
+                self.to_q_global = nn.Sequential(
+                    FeatExtract(dim, keep_dim=True)
+                )
+
+            else:
+                self.to_q_global = nn.Sequential(
+                    FeatExtract(dim, keep_dim=True)
+                )
+
+        elif input_resolution[0] == image_resolution//32:
+            self.to_q_global = nn.Sequential(
+                FeatExtract(dim, keep_dim=True)
+            )
+
+        self.resolution = input_resolution
+        self.num_heads = num_heads
+        self.N = window_size*window_size*window_size
+        self.dim_head = torch.div(dim, self.num_heads, rounding_mode='floor')
+
+    def forward(self, x):
+        B,L,C=x.shape 
+        l=w=s= int(round((L)**(1/3)))
+        x=x.view(B,C,l,w,s)
+        x = self.to_q_global(x)
+        m,n,o,p,q=x.shape
+        x=x.view(m,o,p,q,n)
+        B = x.shape[0]
+        x = x.reshape(B, 1, self.N, self.num_heads, self.dim_head).permute(0, 1, 3, 2, 4)
+        return x
+
+
 class WindowAttention(nn.Module):
 
     def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0.):
@@ -264,7 +404,7 @@ class WindowAttention(nn.Module):
         relative_position_index = relative_coords.sum(-1) 
         self.register_buffer("relative_position_index", relative_position_index)
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.qkv = nn.Linear(dim, dim * 2, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
@@ -272,36 +412,32 @@ class WindowAttention(nn.Module):
 
         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x, mask=None,pos_embed=None):
+    def forward(self, x, q_global):
 
         B_, N, C = x.shape
-        
-        qkv = self.qkv(x)
-        
-        qkv=qkv.reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4).contiguous()
-        q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
-        
+        B = q_global.shape[0]
+        head_dim = torch.div(C, self.num_heads, rounding_mode='floor')
+        B_dim = torch.div(B_, B, rounding_mode='floor')
+        kv = self.qkv(x).reshape(B_, N, 2, self.num_heads, head_dim).permute(2, 0, 3, 1, 4)
+        k, v = kv[0], kv[1]
+        q_global = q_global.repeat(1, B_dim, 1, 1, 1)
+        q = q_global.reshape(B_, self.num_heads,N, head_dim)
         q = q * self.scale
-        attn = (q @ k.transpose(-2, -1).contiguous())
+        attn = (q @ k.transpose(-2, -1))
+        
+        
+        
         relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
             self.window_size[0] * self.window_size[1] * self.window_size[2],
             self.window_size[0] * self.window_size[1] * self.window_size[2], -1)  
         relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous() 
         attn = attn + relative_position_bias.unsqueeze(0)
 
-        if mask is not None:
-            nW = mask.shape[0]
-            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
-            attn = attn.view(-1, self.num_heads, N, N)
-            attn = self.softmax(attn)
-        else:
-            attn = self.softmax(attn)
-
+        attn = self.softmax(attn)
         attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).reshape(B_, N, C).contiguous()
-        if pos_embed is not None:
-            x = x+pos_embed
+        
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -338,9 +474,22 @@ class SwinTransformerBlock(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.layer_scale = True
+        layer_scale =1e-5
+        if layer_scale is not None and type(layer_scale) in [int, float]:
+            self.layer_scale = True
+            self.gamma1 = nn.Parameter(layer_scale * torch.ones(dim), requires_grad=True)
+            self.gamma2 = nn.Parameter(layer_scale * torch.ones(dim), requires_grad=True)
+        else:
+            self.gamma1 = 1.0
+            self.gamma2 = 1.0
+
+        inp_w = torch.div(input_resolution[0], window_size, rounding_mode='floor')
+        self.num_windows = int(inp_w * inp_w*inp_w)
+
         
        
-    def forward(self, x, mask_matrix):
+    def forward(self, x,q_global):
 
         B, L, C = x.shape
 
@@ -352,43 +501,16 @@ class SwinTransformerBlock(nn.Module):
         shortcut = x
         x = self.norm1(x)
         x = x.view(B, S, H, W, C)
+        h_w = torch.div(H, self.window_size, rounding_mode='floor')
+        w_w = torch.div(W, self.window_size, rounding_mode='floor')
+        s_w = torch.div(S, self.window_size, rounding_mode='floor')      
+        x_windows = window_partition(x, self.window_size)
+        x_windows = x_windows.view(-1, self.window_size * self.window_size*self.window_size, C)
+        attn_windows = self.attn(x_windows, q_global)
+        x = window_reverse(attn_windows, self.window_size, H, W,S)
 
-        # pad feature maps to multiples of window size
-        pad_r = (self.window_size - W % self.window_size) % self.window_size
-        pad_b = (self.window_size - H % self.window_size) % self.window_size
-        pad_g = (self.window_size - S % self.window_size) % self.window_size
 
-        x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-        _, Sp, Hp, Wp, _ = x.shape
-
-        # cyclic shift
-        if self.shift_size > 0:
-            shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
-            attn_mask = mask_matrix
-        else:
-            shifted_x = x
-            attn_mask = None
-       
-        # partition windows
-        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
-                                   C)  
-
-        # W-MSA/SW-MSA
-        attn_windows = self.attn(x_windows, mask=attn_mask,pos_embed=None)  
-
-        # merge windows
-        attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
-        shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp) 
-
-        # reverse cyclic shift
-        if self.shift_size > 0:
-            x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size, self.shift_size), dims=(1, 2, 3))
-        else:
-            x = shifted_x
-
-        if pad_r > 0 or pad_b > 0 or pad_g > 0:
-            x = x[:, :S, :H, :W, :].contiguous()
+    
 
         x = x.view(B, S * H * W, C)
 
@@ -489,39 +611,14 @@ class BasicLayer(nn.Module):
             self.downsample = downsample(dim=dim, norm_layer=norm_layer)
         else:
             self.downsample = None
-
+        self.q_global_gen = GlobalQueryGen(dim, input_resolution, 128, window_size, num_heads)
     def forward(self, x, S, H, W):
-      
+        q_global = self.q_global_gen(x)
 
-        # calculate attention mask for SW-MSA
-        Sp = int(np.ceil(S / self.window_size)) * self.window_size
-        Hp = int(np.ceil(H / self.window_size)) * self.window_size
-        Wp = int(np.ceil(W / self.window_size)) * self.window_size
-        img_mask = torch.zeros((1, Sp, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
-        s_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        h_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        cnt = 0
-        for s in s_slices:
-            for h in h_slices:
-                for w in w_slices:
-                    img_mask[:, s, h, w, :] = cnt
-                    cnt += 1
-
-        mask_windows = window_partition(img_mask, self.window_size)  
-        mask_windows = mask_windows.view(-1,
-                                         self.window_size * self.window_size * self.window_size)  
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        # calculate attention mask f
         for blk in self.blocks:
           
-            x = blk(x, attn_mask)
+            x = blk(x, q_global)
         if self.downsample is not None:
             x_down = self.downsample(x, S, H, W)
             Ws, Wh, Ww = (S + 1) // 2, (H + 1) // 2, (W + 1) // 2
@@ -555,7 +652,7 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock_kv(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
@@ -587,6 +684,8 @@ class BasicLayer_up(nn.Module):
 
         
         self.Upsample = upsample(dim=2*dim, norm_layer=norm_layer)
+        self.q_global_gen = GlobalQueryGen(dim, input_resolution, 128, window_size, num_heads)
+
     def forward(self, x,skip, S, H, W):
         
       
@@ -594,36 +693,12 @@ class BasicLayer_up(nn.Module):
        
         x = x_up + skip
         S, H, W = S * 2, H * 2, W * 2
+        q_global = self.q_global_gen(x)
         # calculate attention mask for SW-MSA
-        Sp = int(np.ceil(S / self.window_size)) * self.window_size
-        Hp = int(np.ceil(H / self.window_size)) * self.window_size
-        Wp = int(np.ceil(W / self.window_size)) * self.window_size
-        img_mask = torch.zeros((1, Sp, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
-        s_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        h_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        cnt = 0
-        for s in s_slices:
-            for h in h_slices:
-                for w in w_slices:
-                    img_mask[:, s, h, w, :] = cnt
-                    cnt += 1
-
-        mask_windows = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1,
-                                         self.window_size * self.window_size * self.window_size)  # 3d��3��winds�˻�����Ŀ�Ǻܴ�ģ�����winds����̫��
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
-        
-        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
+      
+        x = self.blocks[0](x, q_global)
         for i in range(self.depth-1):
-            x = self.blocks[i+1](x,attn_mask)
+            x = self.blocks[i+1](x,q_global)
         
         return x, S, H, W
         
@@ -894,10 +969,10 @@ class nnFormer(SegmentationNetwork):
                 input_channels=1, 
                 num_classes=14, 
                 conv_op=nn.Conv3d, 
-                depths=[2,2,2,2],
-                num_heads=[6, 12, 24, 48],
+                depths=[2,2,6,2],
+                num_heads=[2,4,8,16],
                 patch_size=[2,4,4],
-                window_size=[4,4,8,4],
+                window_size=[4,4,4,4],
                 deep_supervision=True):
       
         super(nnFormer, self).__init__()
