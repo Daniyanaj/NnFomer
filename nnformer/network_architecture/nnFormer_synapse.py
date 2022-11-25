@@ -87,7 +87,7 @@ class SwinTransformerBlock_kv(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Resblock(dim,mlp_hidden_dim,act_layer=act_layer, drop=drop)
+        #self.mlp = Resblock(dim,dim,act_layer=act_layer, drop=drop)
        
     def forward(self, x, mask_matrix,skip=None,x_up=None):
     
@@ -149,7 +149,7 @@ class SwinTransformerBlock_kv(nn.Module):
 
         # FFN
         x = shortcut + self.drop_path(x)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        x = x + self.drop_path(self.norm2(x))
 
         return x
         
@@ -253,6 +253,7 @@ class Resblock(nn.Module):
         #self.linear2 = self.conv2=nn.Conv3d(dim//2, dim, 3, stride=1,padding=3,dilation=3)
         #self.avg=nn.AvgPool3d(3,stride=2)
         self.norm=nn.BatchNorm3d(dim//2)
+        self.norm1=nn.BatchNorm3d(dim)
         self.block = nn.Sequential(
             # pw
             nn.Conv3d(dim//2, dim, 3, stride=1, padding=5,dilation=5,groups=dim//2),
@@ -277,6 +278,7 @@ class Resblock(nn.Module):
         # flaten
         
         #x = self.linear2(x)
+        ##x=self.norm1(x)
         
         x = rearrange(x, ' b c h w s-> b (h w s) c', h = hh, w = hh, s=hh).contiguous()
         return x
@@ -389,7 +391,7 @@ class SwinTransformerBlock(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Resblock(dim,mlp_hidden_dim,act_layer=act_layer, drop=drop)
+        #self.mlp = Resblock(dim,dim,act_layer=act_layer, drop=drop)
         
        
     def forward(self, x, mask_matrix):
@@ -446,7 +448,7 @@ class SwinTransformerBlock(nn.Module):
 
         # FFN
         x = shortcut + self.drop_path(x)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        x = x + self.drop_path(self.norm2(x))
 
         return x
 
@@ -541,9 +543,10 @@ class BasicLayer(nn.Module):
             self.downsample = downsample(dim=dim, norm_layer=norm_layer)
         else:
             self.downsample = None
+        self.mlp = Resblock(dim,dim,act_layer=nn.GELU, drop=drop)    
 
     def forward(self, x, S, H, W):
-      
+        x=self.mlp(x)
 
         # calculate attention mask for SW-MSA
         Sp = int(np.ceil(S / self.window_size)) * self.window_size
@@ -636,15 +639,17 @@ class BasicLayer_up(nn.Module):
                         drop_path=drop_path[i+1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
                         )
         
-
+        
         
         self.Upsample = upsample(dim=2*dim, norm_layer=norm_layer)
+        self.mlp = Resblock(dim,dim,act_layer=nn.GELU, drop=drop) 
     def forward(self, x,skip, S, H, W):
         
       
         x_up = self.Upsample(x, S, H, W)
        
         x = x_up + skip
+        x=self.mlp(x)
         S, H, W = S * 2, H * 2, W * 2
         # calculate attention mask for SW-MSA
         Sp = int(np.ceil(S / self.window_size)) * self.window_size
