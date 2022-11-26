@@ -306,6 +306,84 @@ class WindowAttention(nn.Module):
         x = self.proj_drop(x)
         return x
 
+class _shift(nn.Module):
+    @staticmethod
+    def forward(ctx, input, shift, dim):
+        assert input.dim() == 5 and input.is_cuda
+        batch_size, channels, height, width ,depth= input.size()
+
+        output = input.new(batch_size, channels, height, width,depth)
+        n = output.numel()
+
+        with torch.cuda.device_of(input):
+            f = load_kernel('shift_forward_kernel', _shift_kernel, Dtype=Dtype(input), nthreads=n,
+                            num=batch_size, channels=channels, 
+                            height=height, width=width, depth=depth,
+                            shift=shift, dim=dim, group=int(math.ceil(channels/shift))
+                            )
+
+            f(block=(CUDA_NUM_THREADS,1,1),
+              grid=(GET_BLOCKS(n),1,1),
+              args=[input.data_ptr(), output.data_ptr()],
+              stream=Stream(ptr=torch.cuda.current_stream().cuda_stream))
+
+        ctx.save_for_backward(input)
+        ctx.shift, ctx.dim = shift, dim
+        return output        
+
+ 
+def _shift_cuda(input, shift, dim):
+    """ shift kernel
+    """
+    #assert shift >=3 and shift % 2 == 1
+    assert dim == 2 or dim == 3
+
+    if input.is_cuda:
+        out = _shift(input,shift, dim)
+    else:
+        raise NotImplementedError
+    return out
+
+
+class Shift(nn.Module):
+    def __init__(self,
+                 kernel_size,
+                 dim):
+        super(Shift, self).__init__()
+        self.kernel_size = kernel_size
+        self.dim = dim
+        assert dim == 2 or dim == 3
+        #assert kernel_size % 2 == 1
+
+    def forward(self, x):
+        if self.kernel_size == 1:
+            return x
+
+        out = _shift_cuda(x, self.kernel_size, self.dim)
+        return out
+
+
+def torch_shift(x, shift_size, dim):
+    B_, C, H, W,S = x.shape
+    pad = shift_size // 2
+
+    x = F.pad(x, (pad, pad, pad, pad,pad) , "constant", 0)
+    xs = torch.chunk(x, shift_size, 1)
+    x_shift = [ torch.roll(x_c, shift, dim) for x_c, shift in zip(xs, range(-pad, pad+1))]
+    x_cat = torch.cat(x_shift, 1)
+    x_cat = torch.narrow(x_cat, 2, pad, H)
+    x_cat = torch.narrow(x_cat, 3, pad, W)
+    x_cat = torch.narrow(x_cat, 4, pad, S)
+    
+    return x_cat
+
+
+
+
+    
+    
+
+
 class SwinTransformerBlock(nn.Module):
     
     def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
@@ -327,6 +405,7 @@ class SwinTransformerBlock(nn.Module):
         assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
 
         self.norm1 = norm_layer(dim)
+        
         
         self.attn = WindowAttention(
             dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
@@ -351,9 +430,8 @@ class SwinTransformerBlock(nn.Module):
         
         shortcut = x
         x = self.norm1(x)
-        x = x.view(B, S, H, W, C)
+        x = x.view(B, H, W, S,C)
 
-        # pad feature maps to multiples of window size
         pad_r = (self.window_size - W % self.window_size) % self.window_size
         pad_b = (self.window_size - H % self.window_size) % self.window_size
         pad_g = (self.window_size - S % self.window_size) % self.window_size
@@ -371,14 +449,29 @@ class SwinTransformerBlock(nn.Module):
        
         # partition windows
         x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
-                                   C)  
+        # x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
+        #                            C)  
+        # d,e,f=x_windows.shape 
+        x_windows=x_windows.view(B,C, H, W ,S)
+        shift_size=1
+        pad = shift_size//2
 
-        # W-MSA/SW-MSA
+        x = F.pad(x_windows, (pad,pad, pad, pad, pad,pad,pad,pad) , "constant", 0)
+        xs = torch.chunk(x, shift_size, 1)
+        x_shift = [ torch.roll(x_c, shift, 3) for x_c, shift in zip(xs, range(-pad, pad+1))]
+        x_cat = torch.cat(x_shift, 1)
+        x_cat = torch.narrow(x_cat, 2, pad, H)
+        x_cat = torch.narrow(x_cat, 3, pad, W)
+        x_windows= torch.narrow(x_cat, 4, pad, S)
+        
+        x_windows= x_windows.view(-1, self.window_size * self.window_size * self.window_size,
+                                  C)  
+                                
         attn_windows = self.attn(x_windows, mask=attn_mask,pos_embed=None)  
 
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
+
         shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp) 
 
         # reverse cyclic shift
@@ -389,6 +482,10 @@ class SwinTransformerBlock(nn.Module):
 
         if pad_r > 0 or pad_b > 0 or pad_g > 0:
             x = x[:, :S, :H, :W, :].contiguous()
+
+                             
+
+        
 
         x = x.view(B, S * H * W, C)
 
@@ -555,7 +652,7 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock_kv(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
@@ -621,7 +718,7 @@ class BasicLayer_up(nn.Module):
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
+        x = self.blocks[0](x, attn_mask)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x,attn_mask)
         
