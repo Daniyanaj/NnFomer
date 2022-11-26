@@ -448,15 +448,15 @@ class SwinTransformerBlock(nn.Module):
             attn_mask = None
        
         # partition windows
-        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+        #x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
         # x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
         #                            C)  
         # d,e,f=x_windows.shape 
-        x_windows=x_windows.view(B,C, H, W ,S)
+        x=x.view(B,C, H, W ,S)
         shift_size=1
         pad = shift_size//2
 
-        x = F.pad(x_windows, (pad,pad, pad, pad, pad,pad,pad,pad) , "constant", 0)
+        x = F.pad(x, (pad,pad, pad, pad, pad,pad,pad,pad) , "constant", 0)
         xs = torch.chunk(x, shift_size, 1)
         x_shift = [ torch.roll(x_c, shift, 3) for x_c, shift in zip(xs, range(-pad, pad+1))]
         x_cat = torch.cat(x_shift, 1)
