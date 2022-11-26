@@ -69,7 +69,7 @@ class nnFormerTrainerV2_nnformer_tumor(nnFormerTrainer):
         self.embedding_dim=96
         self.depths=[2, 2, 2, 2]
         self.num_heads=[3, 6, 12, 24]
-        self.embedding_patch_size=[4,4,4]
+        self.embedding_patch_size=[4,8,8]
         self.window_size=[4,4,8,4]
         
         self.deep_supervision=False
