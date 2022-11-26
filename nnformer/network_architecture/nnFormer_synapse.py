@@ -652,7 +652,7 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock(
+            SwinTransformerBlock_kv(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
@@ -718,7 +718,7 @@ class BasicLayer_up(nn.Module):
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x, attn_mask)
+        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x,attn_mask)
         
