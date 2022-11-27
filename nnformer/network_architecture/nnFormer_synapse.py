@@ -306,6 +306,106 @@ class WindowAttention(nn.Module):
         x = self.proj_drop(x)
         return x
 
+class AxialShift(nn.Module):
+    r""" Axial shift  
+    Args:
+        dim (int): Number of input channels.
+        shift_size (int): shift size .
+        as_bias (bool, optional):  If True, add a learnable bias to as mlp. Default: True
+        proj_drop (float, optional): Dropout ratio of output. Default: 0.0
+    """
+
+    def __init__(self, dim, shift_size, as_bias=True, proj_drop=0.):
+
+        super().__init__()
+        self.dim = dim
+        self.shift_size = shift_size
+        self.pad = shift_size // 2
+        self.conv1 = nn.Conv3d(dim, dim, 1, 1, 0, groups=1, bias=as_bias)
+        self.conv2_1 = nn.Conv3d(dim+4, dim, 1, 1, 0, groups=1, bias=as_bias)
+        self.conv2_2 = nn.Conv3d(dim+4, dim, 1, 1, 0, groups=1, bias=as_bias)
+        self.conv3 = nn.Conv3d(dim, dim, 1, 1, 0, groups=1, bias=as_bias)
+
+        self.actn = nn.GELU()
+        
+        self.norm1 = nn.LayerNorm(dim)
+        self.norm2 = nn.LayerNorm(dim)
+
+       # self.shift_dim2 = Shift(self.shift_size, 2)                                                   
+        #self.shift_dim3 = Shift(self.shift_size, 3)
+
+    def forward(self, x):
+        """
+        Args:
+            x: input features with shape of (num_windows*B, N, C)
+            mask: (0/-inf) mask with shape of (num_windows, Wh*Ww, Wh*Ww) or None
+        """
+        B_, C, H, W,S = x.shape
+
+        x = self.conv1(x)
+        l,m,n,o,p=x.shape
+        x=x.view(l,n,o,p,m)
+        x = self.norm1(x)
+        x=x.view(l,m,n,o,p)
+        x = self.actn(x)
+       
+        '''
+        x = F.pad(x, (self.pad, self.pad, self.pad, self.pad) , "constant", 0)
+        
+        xs = torch.chunk(x, self.shift_size, 1)
+        def shift(dim):
+            x_shift = [ torch.roll(x_c, shift, dim) for x_c, shift in zip(xs, range(-self.pad, self.pad+1))]
+            x_cat = torch.cat(x_shift, 1)
+            x_cat = torch.narrow(x_cat, 2, self.pad, H)
+            x_cat = torch.narrow(x_cat, 3, self.pad, W)
+            return x_cat
+        x_shift_lr = shift(3)
+        x_shift_td = shift(2)
+        '''
+        x=x.view(B_,C, H, W ,S)
+        shift_size=5
+        pad = shift_size//2
+
+        x1 = F.pad(x, (pad,pad, pad, pad, pad,pad,pad,pad) , "constant", 0)
+        xs = torch.chunk(x1, shift_size, 1)
+        x_shift = [ torch.roll(x_c, shift, 3) for x_c, shift in zip(xs, range(-pad, pad+1))]
+        x_cat = torch.cat(x_shift, 1)
+        x_cat = torch.narrow(x_cat, 2, pad, H)
+        x_cat = torch.narrow(x_cat, 3, pad, W)
+        x1= torch.narrow(x_cat, 4, pad, S)
+
+        shift_size=5
+        pad = shift_size//2
+
+        x2 = F.pad(x, (pad,pad, pad, pad, pad,pad,pad,pad) , "constant", 0)
+        xs1 = torch.chunk(x2, shift_size, 1)
+        x_shift1 = [ torch.roll(x_c, shift, 2) for x_c, shift in zip(xs1, range(-pad, pad+1))]
+        x_cat1 = torch.cat(x_shift1, 1)
+        x_cat1 = torch.narrow(x_cat1, 2, pad, H)
+        x_cat1 = torch.narrow(x_cat1, 3, pad, W)
+        x2= torch.narrow(x_cat1, 4, pad, S)
+
+
+        
+        #x_shift_lr = self.shift_dim3(x)
+        #x_shift_td = self.shift_dim2(x)
+        
+        x_lr = self.conv2_1(x1)
+        x_td = self.conv2_2(x2)
+
+        x_lr = self.actn(x_lr)
+        x_td = self.actn(x_td)
+
+        x = x_lr + x_td
+        x=x.view(l,n,o,p,m)
+        x = self.norm2(x)
+        x=x.view(l,m,n,o,p)
+
+        x = self.conv3(x)
+
+        return x
+
+
 class SwinTransformerBlock(nn.Module):
     
     def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
@@ -328,10 +428,8 @@ class SwinTransformerBlock(nn.Module):
 
         self.norm1 = norm_layer(dim)
         
-        self.attn = WindowAttention(
-            dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
-            qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
-       
+        
+        self.axial_shift = AxialShift(dim, shift_size=shift_size, as_bias=True, proj_drop=drop)
             
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -340,7 +438,7 @@ class SwinTransformerBlock(nn.Module):
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
         
        
-    def forward(self, x, mask_matrix):
+    def forward(self, x):
 
         B, L, C = x.shape
 
@@ -351,44 +449,10 @@ class SwinTransformerBlock(nn.Module):
         
         shortcut = x
         x = self.norm1(x)
-        x = x.view(B, S, H, W, C)
+        x = x.view(B,C, H, W, S)
 
         # pad feature maps to multiples of window size
-        pad_r = (self.window_size - W % self.window_size) % self.window_size
-        pad_b = (self.window_size - H % self.window_size) % self.window_size
-        pad_g = (self.window_size - S % self.window_size) % self.window_size
-
-        x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-        _, Sp, Hp, Wp, _ = x.shape
-
-        # cyclic shift
-        if self.shift_size > 0:
-            shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
-            attn_mask = mask_matrix
-        else:
-            shifted_x = x
-            attn_mask = None
-       
-        # partition windows
-        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
-                                   C)  
-
-        # W-MSA/SW-MSA
-        attn_windows = self.attn(x_windows, mask=attn_mask,pos_embed=None)  
-
-        # merge windows
-        attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
-        shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp) 
-
-        # reverse cyclic shift
-        if self.shift_size > 0:
-            x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size, self.shift_size), dims=(1, 2, 3))
-        else:
-            x = shifted_x
-
-        if pad_r > 0 or pad_b > 0 or pad_g > 0:
-            x = x[:, :S, :H, :W, :].contiguous()
+        x = self.axial_shift(x)
 
         x = x.view(B, S * H * W, C)
 
@@ -494,34 +558,10 @@ class BasicLayer(nn.Module):
       
 
         # calculate attention mask for SW-MSA
-        Sp = int(np.ceil(S / self.window_size)) * self.window_size
-        Hp = int(np.ceil(H / self.window_size)) * self.window_size
-        Wp = int(np.ceil(W / self.window_size)) * self.window_size
-        img_mask = torch.zeros((1, Sp, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
-        s_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        h_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        cnt = 0
-        for s in s_slices:
-            for h in h_slices:
-                for w in w_slices:
-                    img_mask[:, s, h, w, :] = cnt
-                    cnt += 1
-
-        mask_windows = window_partition(img_mask, self.window_size)  
-        mask_windows = mask_windows.view(-1,
-                                         self.window_size * self.window_size * self.window_size)  
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        
         for blk in self.blocks:
           
-            x = blk(x, attn_mask)
+            x = blk(x)
         if self.downsample is not None:
             x_down = self.downsample(x, S, H, W)
             Ws, Wh, Ww = (S + 1) // 2, (H + 1) // 2, (W + 1) // 2
@@ -555,7 +595,7 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock_kv(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
@@ -595,35 +635,12 @@ class BasicLayer_up(nn.Module):
         x = x_up + skip
         S, H, W = S * 2, H * 2, W * 2
         # calculate attention mask for SW-MSA
-        Sp = int(np.ceil(S / self.window_size)) * self.window_size
-        Hp = int(np.ceil(H / self.window_size)) * self.window_size
-        Wp = int(np.ceil(W / self.window_size)) * self.window_size
-        img_mask = torch.zeros((1, Sp, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
-        s_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        h_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        w_slices = (slice(0, -self.window_size),
-                    slice(-self.window_size, -self.shift_size),
-                    slice(-self.shift_size, None))
-        cnt = 0
-        for s in s_slices:
-            for h in h_slices:
-                for w in w_slices:
-                    img_mask[:, s, h, w, :] = cnt
-                    cnt += 1
-
-        mask_windows = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
-        mask_windows = mask_windows.view(-1,
-                                         self.window_size * self.window_size * self.window_size)  # 3d��3��winds�˻�����Ŀ�Ǻܴ�ģ�����winds����̫��
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
+      
+        
+        x = self.blocks[0](x)
         for i in range(self.depth-1):
-            x = self.blocks[i+1](x,attn_mask)
+            x = self.blocks[i+1](x)
         
         return x, S, H, W
         
