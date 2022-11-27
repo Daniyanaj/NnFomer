@@ -83,9 +83,9 @@ class SwinTransformerBlock_kv(nn.Module):
                 dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
                 qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
 
-        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096//2, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512//2, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64//2, act_layer=act_layer, drop=drop)        
+        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)        
         
         #self.window_size=to_3tuple(self.window_size)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -373,9 +373,9 @@ class SwinTransformerBlock(nn.Module):
             dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
             qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
         
-        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096//2, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512//2, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64//2, act_layer=act_layer, drop=drop)
+        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
         #self.mlp_tokens_3 = Mlp(in_features=8, hidden_features=8, act_layer=act_layer, drop=drop)
             
 
