@@ -436,7 +436,7 @@ class FocalModulation(nn.Module):
             kernel_size = self.focal_factor*k + self.focal_window-3
             self.focal_layers.append(
                 nn.Sequential(
-                    nn.Conv3d(dim, dim, kernel_size=kernel_size, stride=1, groups=dim,
+                    nn.Conv3d(dim, dim, kernel_size=kernel_size, stride=1, groups=dim//4,
                         padding=kernel_size//2, bias=False),
                     nn.GELU(),
                     )
