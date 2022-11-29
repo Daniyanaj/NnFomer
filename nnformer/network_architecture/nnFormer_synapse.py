@@ -322,8 +322,8 @@ class AxialShift(nn.Module):
         self.shift_size = shift_size
         self.pad = shift_size // 2
         self.conv1 = nn.Conv3d(dim, dim, 1, 1, 0, groups=1, bias=as_bias)
-        self.conv2_1 = nn.Conv3d(dim+4, dim, 1, 1, 0, groups=1, bias=as_bias)
-        self.conv2_2 = nn.Conv3d(dim+4, dim, 1, 1, 0, groups=1, bias=as_bias)
+        self.conv2_1 = nn.Conv3d(dim, dim, 1, 1, 0, groups=1, bias=as_bias)
+        self.conv2_2 = nn.Conv3d(dim, dim, 1, 1, 0, groups=1, bias=as_bias)
         self.conv3 = nn.Conv3d(dim, dim, 1, 1, 0, groups=1, bias=as_bias)
 
         self.actn = nn.GELU()
@@ -363,7 +363,7 @@ class AxialShift(nn.Module):
         x_shift_td = shift(2)
         '''
         x=x.view(B_,C, H, W ,S)
-        shift_size=5
+        shift_size=1
         pad = shift_size//2
 
         x1 = F.pad(x, (pad,pad, pad, pad, pad,pad,pad,pad) , "constant", 0)
@@ -374,7 +374,7 @@ class AxialShift(nn.Module):
         x_cat = torch.narrow(x_cat, 3, pad, W)
         x1= torch.narrow(x_cat, 4, pad, S)
 
-        shift_size=5
+        shift_size=1
         pad = shift_size//2
 
         x2 = F.pad(x, (pad,pad, pad, pad, pad,pad,pad,pad) , "constant", 0)
