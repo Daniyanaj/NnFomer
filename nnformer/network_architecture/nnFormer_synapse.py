@@ -41,6 +41,31 @@ class Mlp(nn.Module):
         x = self.drop(x)
         return x
 
+class Mlp_conv(nn.Module):
+    """ Multilayer perceptron."""
+
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Conv1d(in_features, hidden_features,3, padding=1)
+        self.act = act_layer()
+        self.fc2 = nn.Conv1d(hidden_features, out_features,3, padding=1)
+        self.drop = nn.Dropout(drop)
+
+    def forward(self, x):
+        b,l,c=x.shape
+        x=x.reshape(b,c,l)
+        x = self.fc1(x)
+        x=x.reshape(b,l,c)
+        x = self.act(x)
+        x = self.drop(x)
+        x=x.reshape(b,c,l)
+        x = self.fc2(x)
+        x=x.reshape(b,l,c)
+        x = self.drop(x)
+        return x        
+
 
 def window_partition(x, window_size):
   
@@ -83,9 +108,9 @@ class SwinTransformerBlock_kv(nn.Module):
                 dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
                 qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
 
-        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)        
+        self.mlp_tokens = Mlp_conv(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_1 = Mlp_conv(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_2 = Mlp_conv(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)        
         
         #self.window_size=to_3tuple(self.window_size)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -373,9 +398,9 @@ class SwinTransformerBlock(nn.Module):
             dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
             qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
         
-        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
+        self.mlp_tokens = Mlp_conv(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_1 = Mlp_conv(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_2 = Mlp_conv(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
         #self.mlp_tokens_3 = Mlp(in_features=8, hidden_features=8, act_layer=act_layer, drop=drop)
             
 
