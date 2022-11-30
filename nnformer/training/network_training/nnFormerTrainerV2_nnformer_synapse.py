@@ -185,7 +185,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
 
         from fvcore.nn import FlopCountAnalysis
         
-        inp = torch.ones(2,1,64,128,128)
+        inp = torch.ones(1,1,64,128,128)
         flops = FlopCountAnalysis(ml, inp)
         model_flops=flops.total()
         #print(f"Total Trainable Params: {round(total_params * 1e-6, 2)} M")
