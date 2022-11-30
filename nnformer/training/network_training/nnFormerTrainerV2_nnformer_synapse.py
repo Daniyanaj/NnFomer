@@ -177,7 +177,19 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
             #checkpoint = torch.load('/home/xychen/jsguo/weight/gelunorm_former_skip_global_shift.model', map_location='cpu')
             #self.network.load_state_dict(checkpoint)
             #print('I am using the pre_train weight!!')   
+        ml=self.network             
+
         
+        pytorch_total_params = sum(p.numel() for p in ml.parameters() if p.requires_grad)
+        print("Total parameters count", pytorch_total_params) 
+
+        from fvcore.nn import FlopCountAnalysis
+        inp = torch.randn(2,1,64,128,128)
+        flops = FlopCountAnalysis(ml, inp)
+        a=flops.total()
+        print("flops",a)
+
+
      
         if torch.cuda.is_available():
             self.network.cuda()
