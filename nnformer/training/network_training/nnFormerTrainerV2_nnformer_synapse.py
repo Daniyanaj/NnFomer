@@ -184,10 +184,14 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         print("Total parameters count", pytorch_total_params) 
 
         from fvcore.nn import FlopCountAnalysis
-        inp = torch.randn(2,1,64,128,128)
+        
+        inp = torch.ones(2,1,64,128,128)
         flops = FlopCountAnalysis(ml, inp)
-        a=flops.total()
-        print("flops",a)
+        model_flops=flops.total()
+        #print(f"Total Trainable Params: {round(total_params * 1e-6, 2)} M")
+        print(f"MAdds: {round(model_flops * 1e-9, 2)} G")
+
+       
      
         if torch.cuda.is_available():
             self.network.cuda()
