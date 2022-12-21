@@ -1,3 +1,4 @@
+from tkinter import X
 from einops import rearrange
 from copy import deepcopy
 from nnformer.utilities.nd_softmax import softmax_helper
@@ -83,15 +84,23 @@ class SwinTransformerBlock_kv(nn.Module):
                 dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
                 qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
 
-        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)        
+        # self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)        
         
         #self.window_size=to_3tuple(self.window_size)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.attn1 = DynaMixerBlock(384, resolution=16, num_heads=num_heads, reduced_dim=3, qkv_bias=qkv_bias, qk_scale=None,
+                           attn_drop=attn_drop)
+        self.attn2 = DynaMixerBlock(768, resolution=8, num_heads=num_heads, reduced_dim=3, qkv_bias=qkv_bias, qk_scale=None,
+                           attn_drop=attn_drop)     
+        self.attn3 = DynaMixerBlock(1536, resolution=4, num_heads=num_heads, reduced_dim=3, qkv_bias=qkv_bias, qk_scale=None,
+                           attn_drop=attn_drop)                                 
+        
+       
        
     def forward(self, x, mask_matrix,skip=None,x_up=None):
     
@@ -160,35 +169,37 @@ class SwinTransformerBlock_kv(nn.Module):
             return x
 
         elif L==4096:
-            
-            mlp=self.mlp_tokens
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            S=H=W=16
+            shortcut=x
+            x=self.norm1(x)
+            x=x.view(B,H,W,S,C)
+            x=self.attn1(x)
+            x=x.view(B,H*W*S,C)
+            x = shortcut+ self.drop_path(x) 
+            x = x + self.drop_path(self.mlp(self.norm2(x))) 
             return x
 
-        
         elif L==512:
-            
-            mlp= self.mlp_tokens_1
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
+            S=H=W=8
+            shortcut=x
+            x=self.norm1(x)
+            x=x.view(B,H,W,S,C)
+            x=self.attn2(x)
+            x=x.view(B,H*W*S,C)
+            x = shortcut+ self.drop_path(x) 
+            x = x + self.drop_path(self.mlp(self.norm2(x))) 
+            return x    
 
         else:
-            
-            mlp=self.mlp_tokens_2
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x    
+            S=H=W=4
+            shortcut=x
+            x=self.norm1(x)
+            x=x.view(B,H,W,S,C)
+            x=self.attn3(x)
+            x=x.view(B,H*W*S,C)
+            x = shortcut+ self.drop_path(x) 
+            x = x + self.drop_path(self.mlp(self.norm2(x))) 
+            return x 
               
             
 
@@ -347,6 +358,74 @@ class WindowAttention(nn.Module):
         x = self.proj_drop(x)
         return x
 
+
+
+
+class DynaMixerOp(nn.Module):
+    def __init__(self, dim, seq_len, num_heads, reduced_dim=3):
+        super().__init__()
+        self.dim = dim
+        self.seq_len = seq_len
+        self.num_heads = num_heads
+        self.reduced_dim = reduced_dim
+        self.out = nn.Linear(dim, dim)
+        self.compress = nn.Linear(dim, num_heads * reduced_dim)
+        self.generate = nn.Linear(seq_len * reduced_dim, seq_len * seq_len)
+        self.activation = nn.Softmax(dim=-2)
+
+    def forward(self, x):
+        B, L, C = x.shape
+        weights = self.compress(x).reshape(B, L, self.num_heads, self.reduced_dim).permute(0, 2, 1, 3).reshape(B, self.num_heads, -1)
+       
+        weights = self.generate(weights).reshape(B, self.num_heads, L, L)
+        weights = self.activation(weights)
+        x = x.reshape(B, L, self.num_heads, C//self.num_heads).permute(0, 2, 3, 1)
+        x = torch.matmul(x, weights)
+        x = x.permute(0, 3, 1, 2).reshape(B, L, C)
+        x = self.out(x)
+        return x
+
+
+class DynaMixerBlock(nn.Module):
+    def __init__(self, dim, resolution=32, num_heads=8, reduced_dim=2, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):
+        super().__init__()
+        if dim==384:
+            resolution=16
+            
+        elif dim==768:
+            resolution=8
+            
+        else:
+            resolution=4    
+        self.resolution = resolution
+        self.num_heads = num_heads
+        self.mix_h = DynaMixerOp(dim, resolution, self.num_heads, reduced_dim=reduced_dim)
+        self.mix_w = DynaMixerOp(dim, resolution, self.num_heads, reduced_dim=reduced_dim)
+        self.mix_s = DynaMixerOp(dim, resolution, self.num_heads, reduced_dim=reduced_dim)
+        self.mlp_c = nn.Linear(dim, dim, bias=qkv_bias)
+        self.reweight = Mlp(dim, dim // 4, dim * 3)
+
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+    def forward(self, x):
+        
+        B, H, W, S, C = x.shape
+        h = self.mix_h(x.permute(0,3, 2, 1, 4).reshape(-1, H, C)).reshape(B, S,W, H, C).permute(0, 3, 2,1, 4)
+        w=self.mix_w(x.permute(0,1, 3, 2, 4).reshape(-1, W, C)).reshape(B, H,S,W, C).permute(0, 1, 3,2, 4)
+        s= self.mix_s(x.reshape(-1, S, C)).reshape(B, H, W, S,C)
+        c = self.mlp_c(x)
+
+        a = (h + w + s+c).permute(0, 4, 1, 2,3).flatten(2).mean(2)
+        a = self.reweight(a).reshape(B, C, 3).permute(2, 0, 1).softmax(dim=0).unsqueeze(2).unsqueeze(2).unsqueeze(2)
+
+        x = h * a[0] + w * a[1] + c * a[2]
+
+        x = self.proj(x)
+        x = self.proj_drop(x)
+
+        return x        
+
 class SwinTransformerBlock(nn.Module):
     
     def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
@@ -373,9 +452,9 @@ class SwinTransformerBlock(nn.Module):
             dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
             qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
         
-        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
         #self.mlp_tokens_3 = Mlp(in_features=8, hidden_features=8, act_layer=act_layer, drop=drop)
             
 
@@ -383,6 +462,12 @@ class SwinTransformerBlock(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.attn1 = DynaMixerBlock(384, resolution=16, num_heads=num_heads, reduced_dim=3, qkv_bias=qkv_bias, qk_scale=None,
+                           attn_drop=attn_drop)
+        self.attn2 = DynaMixerBlock(768, resolution=8, num_heads=num_heads, reduced_dim=3, qkv_bias=qkv_bias, qk_scale=None,
+                           attn_drop=attn_drop)     
+        self.attn3 = DynaMixerBlock(1536, resolution=4, num_heads=num_heads, reduced_dim=3, qkv_bias=qkv_bias, qk_scale=None,
+                           attn_drop=attn_drop)                                 
         
        
     def forward(self, x, mask_matrix):
@@ -443,36 +528,39 @@ class SwinTransformerBlock(nn.Module):
 
 
         elif L==4096:
-            
-            mlp=self.mlp_tokens
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            S=H=W=16
+            shortcut=x
+            x=self.norm1(x)
+            x=x.view(B,H,W,S,C)
+            x=self.attn1(x)
+            x=x.view(B,H*W*S,C)
+            x = shortcut+ self.drop_path(x) 
+            x = x + self.drop_path(self.mlp(self.norm2(x))) 
             return x
+
+        elif L==512:
+            S=H=W=8
+            shortcut=x
+            x=self.norm1(x)
+            x=x.view(B,H,W,S,C)
+            x=self.attn2(x)
+            x=x.view(B,H*W*S,C)
+            x = shortcut+ self.drop_path(x) 
+            x = x + self.drop_path(self.mlp(self.norm2(x))) 
+            return x
+            
+        else:
+            S=H=W=4
+            shortcut=x
+            x=self.norm1(x)
+            x=x.view(B,H,W,S,C)
+            x=self.attn3(x)
+            x=x.view(B,H*W*S,C)
+            x = shortcut+ self.drop_path(x) 
+            x = x + self.drop_path(self.mlp(self.norm2(x))) 
+            return x     
 
         
-        elif L==512:
-            
-            mlp= self.mlp_tokens_1
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
-
-        else:
-            
-            mlp=self.mlp_tokens_2
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x    
-          
 
         # FFN
         
