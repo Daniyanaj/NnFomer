@@ -175,18 +175,18 @@ class nnFormerTrainerV2_nnformer_acdc(nnFormerTrainer):
                                 window_size=self.window_size,
                                 down_stride=self.down_stride,
                                 deep_supervision=self.deep_supervision)
-        if self.load_pretrain_weight:
-            checkpoint = torch.load("/home/xychen/jsguo/weight/tumor_pretrain.model", map_location='cpu') # acdc and tumor use the same pretrain weight
-            ck={}
+        # if self.load_pretrain_weight:
+        #     checkpoint = torch.load("/home/xychen/jsguo/weight/tumor_pretrain.model", map_location='cpu') # acdc and tumor use the same pretrain weight
+        #     ck={}
             
-            for i in self.network.state_dict():
-                if i in checkpoint:
-                    print(i)
-                    ck.update({i:checkpoint[i]})
-                else:
-                    ck.update({i:self.network.state_dict()[i]})
-            self.network.load_state_dict(ck)
-            print('I am using the pre_train weight!!')
+        #     for i in self.network.state_dict():
+        #         if i in checkpoint:
+        #             print(i)
+        #             ck.update({i:checkpoint[i]})
+        #         else:
+        #             ck.update({i:self.network.state_dict()[i]})
+        #     self.network.load_state_dict(ck)
+        #     print('I am using the pre_train weight!!')
         
      
         if torch.cuda.is_available():

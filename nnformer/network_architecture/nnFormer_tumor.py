@@ -630,7 +630,7 @@ class project(nn.Module):
     def __init__(self,in_dim,out_dim,stride,padding,activate,norm,last=False):
         super().__init__()
         self.out_dim=out_dim
-        self.conv1=nn.Conv3d(in_dim,out_dim,kernel_size=3,stride=stride,padding=padding)
+        self.conv1=nn.Conv3d(in_dim,out_dim,kernel_size=5,stride=stride,padding=0)
         self.conv2=nn.Conv3d(out_dim,out_dim,kernel_size=3,stride=1,padding=1)
         self.activate=activate()
         self.norm1=norm(out_dim)
@@ -669,8 +669,10 @@ class PatchEmbed(nn.Module):
 
         self.in_chans = in_chans
         self.embed_dim = embed_dim
-        stride1=[patch_size[0]//2,patch_size[1]//2,patch_size[2]//2]
-        stride2=[patch_size[0]//2,patch_size[1]//2,patch_size[2]//2]
+        # stride1=[patch_size[0]//2,patch_size[1]//2,patch_size[2]//2]
+        # stride2=[patch_size[0]//2,patch_size[1]//2,patch_size[2]//2]
+        stride1=[patch_size[0],patch_size[1]//4,patch_size[2]//4]
+        stride2=[patch_size[0],patch_size[1]//2,patch_size[2]]
         self.proj1 = project(in_chans,embed_dim//2,stride1,1,nn.GELU,nn.LayerNorm,False)
         self.proj2 = project(embed_dim//2,embed_dim,stride2,1,nn.GELU,nn.LayerNorm,True)
         if norm_layer is not None:
@@ -956,6 +958,4 @@ class nnFormer(SegmentationNetwork):
         
         
         
-   
-
    
