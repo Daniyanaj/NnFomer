@@ -28,7 +28,7 @@ PLEASE READ paths.md FOR INFORMATION TO HOW TO SET THIS UP
 
 base = '/l/users/20020134/nnFormer-main/DATA/nnFormer_raw'
 preprocessing_output_dir = '/l/users/20020134/nnFormer-main/DATA/nnFormer_preprocessed'
-network_training_output_dir_base = '/l/users/20020134/nnFormer-main/Results/t1-mixer'
+network_training_output_dir_base = '/l/users/20020134/nnFormer-main/Results/t1-m'
 
 if base is not None:
     nnFormer_raw_data = join(base, "nnFormer_raw_data")
