@@ -82,6 +82,7 @@ class SwinTransformerBlock_kv(nn.Module):
         self.attn = WindowAttention_kv(
                 dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
                 qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
+               
 
         self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
         self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
@@ -368,16 +369,22 @@ class SwinTransformerBlock(nn.Module):
         assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
 
         self.norm1 = norm_layer(dim)
-        
-        self.attn = WindowAttention(
-            dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
-            qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
-        
+        self.act=act_layer()
+        # self.attn = WindowAttention(
+        #     dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
+        #     qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
+        layer_scale_init_value =1e-6
         self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
         self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
         self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
         #self.mlp_tokens_3 = Mlp(in_features=8, hidden_features=8, act_layer=act_layer, drop=drop)
-            
+        self.dwconv = nn.Conv3d(dim, dim, kernel_size=7, padding=3, groups=dim//4) # depthwise conv
+        #self.norm = LayerNorm(dim, eps=1e-6)
+        self.pwconv1 = nn.Linear(dim, 4 * dim) # pointwise/1x1 convs, implemented with linear layers
+        #self.act = nn.GELU()
+        self.pwconv2 = nn.Linear(4 * dim, dim)
+        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((dim)), 
+                                    requires_grad=True) if layer_scale_init_value > 0 else None     
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
@@ -392,53 +399,18 @@ class SwinTransformerBlock(nn.Module):
             S= H=W = 32
    
             assert L == S * H * W, "input feature has wrong size"
+            input = x
+            x = x.view(B, C,S, H, W)
             
-            shortcut = x
+            x = self.dwconv(x)
+            x=x.view(B,L,C)
             x = self.norm1(x)
-            x = x.view(B, S, H, W, C)
-
-            # pad feature maps to multiples of window size
-            pad_r = (self.window_size - W % self.window_size) % self.window_size
-            pad_b = (self.window_size - H % self.window_size) % self.window_size
-            pad_g = (self.window_size - S % self.window_size) % self.window_size
-
-            x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-            _, Sp, Hp, Wp, _ = x.shape
-
-            # cyclic shift
-            if self.shift_size > 0:
-                shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
-                attn_mask = mask_matrix
-            else:
-                shifted_x = x
-                attn_mask = None
-        
-            # partition windows
-            x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-            x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
-                                    C)  
-
-            # W-MSA/SW-MSA
-            attn_windows = self.attn(x_windows, mask=attn_mask,pos_embed=None)  
-
-            # merge windows
-            attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
-            shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp) 
-
-            # reverse cyclic shift
-            if self.shift_size > 0:
-                x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size, self.shift_size), dims=(1, 2, 3))
-            else:
-                x = shifted_x
-
-            if pad_r > 0 or pad_b > 0 or pad_g > 0:
-                x = x[:, :S, :H, :W, :].contiguous()
-
-            x = x.view(B, S * H * W, C)
-
-            # FFN
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            x = self.pwconv1(x)
+            x = self.act(x)
+            x = self.pwconv2(x)
+            if self.gamma is not None:
+                x = self.gamma * x
+            x = input + self.drop_path(x)    
             return x
 
 
@@ -634,7 +606,7 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock_kv(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
@@ -700,7 +672,7 @@ class BasicLayer_up(nn.Module):
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
+        x = self.blocks[0](x, attn_mask)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x,attn_mask)
         
