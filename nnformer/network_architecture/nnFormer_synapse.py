@@ -41,6 +41,42 @@ class Mlp(nn.Module):
         x = self.drop(x)
         return x
 
+class Mlp_new(nn.Module):
+    """ Multilayer perceptron."""
+
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Linear(in_features, hidden_features)
+        self.act = act_layer()
+        self.fc2 = nn.Linear(hidden_features, out_features)
+        self.drop = nn.Dropout(drop)
+        self.mm=Mlp(in_features=384, hidden_features=384, act_layer=act_layer, drop=drop)
+        self.mm1=Mlp(in_features=768, hidden_features=768, act_layer=act_layer, drop=drop)
+        self.mm2=Mlp(in_features=1536, hidden_features=1536, act_layer=act_layer, drop=drop)
+
+    def forward(self, x):
+        B,C,L=x.shape
+        if C//2==192:
+            ml=self.mm
+        elif C//2==384:
+            ml=self.mm1
+        else:
+            ml=self.mm2    
+
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x=x.transpose(1,2)
+        #x=torch.split(x, C//2, dim=2)
+        x=x+ml(x)
+        x=x.transpose(1,2)
+        x = self.fc2(x)
+        x = self.drop(x)
+        return x        
+
+
 
 def window_partition(x, window_size):
   
@@ -374,9 +410,9 @@ class SwinTransformerBlock(nn.Module):
         #     dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
         #     qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
         layer_scale_init_value =1e-6
-        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
+        self.mlp_tokens = Mlp_new(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_1 = Mlp_new(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_2 = Mlp_new(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
         #self.mlp_tokens_3 = Mlp(in_features=8, hidden_features=8, act_layer=act_layer, drop=drop)
         self.dwconv = nn.Conv3d(dim, dim, kernel_size=7, padding=3, groups=dim//4) # depthwise conv
         #self.norm = LayerNorm(dim, eps=1e-6)
