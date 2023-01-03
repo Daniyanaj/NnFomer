@@ -415,33 +415,66 @@ class SwinTransformerBlock(nn.Module):
 
 
         elif L==4096:
-            
+            S=H=W=16
             mlp=self.mlp_tokens
-            shortcut = x
+            s= x
+            s = s.view(B, C,S, H, W)
+            s = self.dwconv(s)
+            s=s.view(B,L,C)
+            s = self.norm1(s)
+            s = self.pwconv1(s)
+            s = self.act(s)
+            s = self.pwconv2(s)
+            if self.gamma is not None:
+                s = self.gamma * s
+            s = self.drop_path(s) 
+
+
+
             x = self.norm1(x).transpose(1, 2)
             x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
+            x = s + self.drop_path(x)
             x = x + self.drop_path(self.mlp(self.norm2(x)))
             return x
 
         
         elif L==512:
-            
+            S=H=W=8
             mlp= self.mlp_tokens_1
-            shortcut = x
+            s= x
+            s = s.view(B, C,S, H, W)
+            s = self.dwconv(s)
+            s=s.view(B,L,C)
+            s = self.norm1(s)
+            s = self.pwconv1(s)
+            s = self.act(s)
+            s = self.pwconv2(s)
+            if self.gamma is not None:
+                s = self.gamma * s
+            s = self.drop_path(s) 
             x = self.norm1(x).transpose(1, 2)
             x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
+            x = s+ self.drop_path(x)
             x = x + self.drop_path(self.mlp(self.norm2(x)))
             return x
 
         else:
-            
+            S=H=W=4
             mlp=self.mlp_tokens_2
-            shortcut = x
+            s= x
+            s = s.view(B, C,S, H, W)
+            s = self.dwconv(s)
+            s=s.view(B,L,C)
+            s = self.norm1(s)
+            s = self.pwconv1(s)
+            s = self.act(s)
+            s = self.pwconv2(s)
+            if self.gamma is not None:
+                s = self.gamma * s
+            s = self.drop_path(s) 
             x = self.norm1(x).transpose(1, 2)
             x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
+            x = s + self.drop_path(x)
             x = x + self.drop_path(self.mlp(self.norm2(x)))
             return x    
           
