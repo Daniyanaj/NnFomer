@@ -52,9 +52,9 @@ class Mlp_new(nn.Module):
         self.act = act_layer()
         self.fc2 = nn.Linear(hidden_features, out_features)
         self.drop = nn.Dropout(drop)
-        self.mm=Mlp(in_features=384, hidden_features=384, act_layer=act_layer, drop=drop)
-        self.mm1=Mlp(in_features=768, hidden_features=768, act_layer=act_layer, drop=drop)
-        self.mm2=Mlp(in_features=1536, hidden_features=1536, act_layer=act_layer, drop=drop)
+        self.mm1=Mlp(in_features=384, hidden_features=384, act_layer=act_layer, drop=drop)
+        self.mm2=Mlp(in_features=768, hidden_features=768, act_layer=act_layer, drop=drop)
+        self.mm=Mlp(in_features=192, hidden_features=192, act_layer=act_layer, drop=drop)
 
     def forward(self, x):
         B,C,L=x.shape
@@ -69,8 +69,9 @@ class Mlp_new(nn.Module):
         x = self.act(x)
         x = self.drop(x)
         x=x.transpose(1,2)
-        #x=torch.split(x, C//2, dim=2)
-        x=x+ml(x)
+        x=torch.split(x, C//2, dim=2)
+        a=ml(x[1])
+        x=torch.cat((x[0],a),dim=2)
         x=x.transpose(1,2)
         x = self.fc2(x)
         x = self.drop(x)
