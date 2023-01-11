@@ -70,7 +70,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         self.num_heads=[6, 12, 24, 48]
         self.embedding_patch_size=[2,4,4]
         self.window_size=[4,4,8,4]
-        self.deep_supervision=True
+        self.deep_supervision=False
     def initialize(self, training=True, force_load_plans=False):
         """
         - replaced get_default_augmentation with get_moreDA_augmentation
@@ -160,23 +160,35 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         Known issue: forgot to set neg_slope=0 in InitWeights_He; should not make a difference though
         :return:
         """
-  
+        self.network= nnFormer(img_size=(64,128,128),
+            in_channels=1,
+            out_channels=14,
+            feature_size=48,
+            drop_rate=0.0,
+            attn_drop_rate=0.0,
+            dropout_path_rate=0.0,
+            use_checkpoint=True,
+        )
+
+
+          
       
         
-        self.network= nnFormer(
-            in_channels=self.input_channels,
-            out_channels=14,
-            img_size=(96,96,96),
-            feature_size=16,
-            hidden_size=768,
-            mlp_dim=3072,
-            num_heads=12,
-            pos_embed="perceptron",
-            norm_name="instance",
-            conv_block=True,
-            res_block=True,
-            dropout_rate=0.0,
-        )
+        # self.network= nnFormer(
+        #     in_channels=1,
+        #     out_channels=14,
+        #     img_size=(64,128,128),
+        #     feature_size=16,
+        #     hidden_size=768,
+        #     mlp_dim=3072,
+        #     num_heads=12,
+        #     pos_embed="perceptron",
+        #     norm_name="instance",
+        #     conv_block=True,
+        #     res_block=True,
+        #     dropout_rate=0.0,
+
+        # )
         #if self.load_pretrain_weight:
             #checkpoint = torch.load('/home/xychen/jsguo/weight/gelunorm_former_skip_global_shift.model', map_location='cpu')
             #self.network.load_state_dict(checkpoint)
@@ -188,7 +200,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         print("Total parameters count", pytorch_total_params) 
 
         from fvcore.nn import FlopCountAnalysis
-        inp = torch.randn(2,1,40,224,224)
+        inp = torch.randn(2,1,64,128,128)
         flops = FlopCountAnalysis(ml, inp)
         a=flops.total()
         print("flops",a)
@@ -236,7 +248,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
                                all_in_gpu=all_in_gpu, segmentation_export_kwargs=segmentation_export_kwargs,
                                run_postprocessing_on_folds=run_postprocessing_on_folds)
 
-        self.network.do_ds = ds
+        self.network.do_ds =False
         return ret
 
     def predict_preprocessed_data_return_seg_and_softmax(self, data: np.ndarray, do_mirroring: bool = True,
@@ -259,7 +271,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
                                                                        pad_kwargs=pad_kwargs, all_in_gpu=all_in_gpu,
                                                                        verbose=verbose,
                                                                        mixed_precision=mixed_precision)
-        self.network.do_ds = ds
+        self.network.do_ds = False
         return ret
 
     def run_iteration(self, data_generator, do_backprop=True, run_online_evaluation=False):
@@ -487,11 +499,11 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         """
         self.maybe_update_lr(self.epoch)  # if we dont overwrite epoch then self.epoch+1 is used which is not what we
         # want at the start of the training
-        ds = self.network.do_ds
+        #ds = self.network.do_ds
         if self.deep_supervision:
-            self.network.do_ds = True
+            self.network.do_ds =False
         else:
             self.network.do_ds = False
         ret = super().run_training()
-        self.network.do_ds = ds
+        self.network.do_ds =False
         return ret
