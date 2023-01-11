@@ -372,6 +372,17 @@ class SwinTransformerBlock(nn.Module):
         self.attn = WindowAttention(
             dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
             qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
+        self.padding = [self.window_size - self.shift_size, self.shift_size,
+                        self.window_size - self.shift_size, self.shift_size,
+                        self.window_size - self.shift_size, self.shift_size]  # P_l,P_r,P_t,P_b
+
+        self.norm1 = norm_layer(dim)
+        # use group convolution to implement multi-head MLP
+        self.spatial_mlp = nn.Conv1d(self.num_heads * self.window_size ** 3,
+                                     self.num_heads * self.window_size ** 3,
+                                     kernel_size=1,
+                                     groups=self.num_heads)
+
         
         self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
         self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
@@ -392,7 +403,6 @@ class SwinTransformerBlock(nn.Module):
             S= H=W = 32
    
             assert L == S * H * W, "input feature has wrong size"
-            
             shortcut = x
             x = self.norm1(x)
             x = x.view(B, S, H, W, C)
@@ -417,12 +427,23 @@ class SwinTransformerBlock(nn.Module):
             x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
             x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
                                     C)  
+            x_windows_heads = x_windows.view(-1, self.window_size * self.window_size*self.window_size, self.num_heads, C // self.num_heads)
+            x_windows_heads = x_windows_heads.transpose(1, 2)  # nW*B, nH, window_size*window_size, C//nH
+            x_windows_heads = x_windows_heads.reshape(-1, self.num_heads * self.window_size * self.window_size*self.window_size,
+                                                    C // self.num_heads)
 
-            # W-MSA/SW-MSA
-            attn_windows = self.attn(x_windows, mask=attn_mask,pos_embed=None)  
+            spatial_mlp_windows = self.spatial_mlp(x_windows_heads)  # nW*B, nH*window_size*window_size, C//nH
+            spatial_mlp_windows = spatial_mlp_windows.view(-1, self.num_heads, self.window_size * self.window_size*self.window_size,
+                                                        C // self.num_heads).transpose(1, 2)
+            spatial_mlp_windows = spatial_mlp_windows.reshape(-1, self.window_size * self.window_size*self.window_size, C)                                          
+            attn_windows = spatial_mlp_windows.reshape(-1, self.window_size, self.window_size,self.window_size, C)
+            
+
+
+                            
 
             # merge windows
-            attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
+            #attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
             shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp) 
 
             # reverse cyclic shift
@@ -439,7 +460,10 @@ class SwinTransformerBlock(nn.Module):
             # FFN
             x = shortcut + self.drop_path(x)
             x = x + self.drop_path(self.mlp(self.norm2(x)))
+
             return x
+            
+           
 
 
         elif L==4096:
@@ -634,7 +658,7 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock_kv(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
@@ -700,7 +724,7 @@ class BasicLayer_up(nn.Module):
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
+        x = self.blocks[0](x, attn_mask)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x,attn_mask)
         
