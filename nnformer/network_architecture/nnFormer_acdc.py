@@ -86,19 +86,31 @@ class SwinTransformerBlock_kv(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
-        self.mlp_tokens = Mlp(in_features=5600, hidden_features=5600, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=700, hidden_features=700, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=75, hidden_features=75, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens = Mlp(in_features=5600, hidden_features=5600, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_1 = Mlp(in_features=700, hidden_features=700, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_2 = Mlp(in_features=75, hidden_features=75, act_layer=act_layer, drop=drop)
         
     def forward(self, x, mask_matrix,skip=None,x_up=None):
 
         assert self.shift_size==[0,0,0]
         B, L, C = x.shape
         S, H, W = self.input_resolution
-        if L==22400:
-            S=14
-            H= W = 40
-            
+        if True:
+            if L==22400:
+
+                S=14
+                H=W = 40
+            elif L==5600:
+                S=14
+                H=W=20
+            elif L==700:
+                S=7
+                H=W=10    
+            else:
+                S=3
+                H=W=5  
+        
+            #print(L)
             assert L == S * H * W, "input feature has wrong size"
             shortcut = x
             skip = self.norm1(skip)
@@ -152,36 +164,36 @@ class SwinTransformerBlock_kv(nn.Module):
 
             return x
 
-        elif L==5600:
+        # elif L==5600:
             
-            mlp=self.mlp_tokens
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
+        #     mlp=self.mlp_tokens
+        #     shortcut = x
+        #     x = self.norm1(x).transpose(1, 2)
+        #     x= mlp(x).transpose(1, 2)
+        #     x = shortcut + self.drop_path(x)
+        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
+        #     return x
 
         
-        elif L==700:
+        # elif L==700:
             
-            mlp= self.mlp_tokens_1
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
+        #     mlp= self.mlp_tokens_1
+        #     shortcut = x
+        #     x = self.norm1(x).transpose(1, 2)
+        #     x= mlp(x).transpose(1, 2)
+        #     x = shortcut + self.drop_path(x)
+        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
+        #     return x
 
-        else:
+        # else:
             
-            mlp=self.mlp_tokens_2
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x    
+        #     mlp=self.mlp_tokens_2
+        #     shortcut = x
+        #     x = self.norm1(x).transpose(1, 2)
+        #     x= mlp(x).transpose(1, 2)
+        #     x = shortcut + self.drop_path(x)
+        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
+        #     return x    
               
             
 
@@ -375,9 +387,9 @@ class SwinTransformerBlock(nn.Module):
         # self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
         # self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
         # self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
-        self.mlp_tokens = Mlp(in_features=5600, hidden_features=5600, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=700, hidden_features=700, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=75, hidden_features=75, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens = Mlp(in_features=5600, hidden_features=5600, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_1 = Mlp(in_features=700, hidden_features=700, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_2 = Mlp(in_features=75, hidden_features=75, act_layer=act_layer, drop=drop)
 
         
        
@@ -391,9 +403,20 @@ class SwinTransformerBlock(nn.Module):
         
         B, L, C = x.shape
         S, H, W = self.input_resolution
-        if L==22400:
-            S=14
-            H=W = 40
+        if True:
+            if L==22400:
+
+                S=14
+                H=W = 40
+            elif L==5600:
+                S=14
+                H=W=20
+            elif L==700:
+                S=7
+                H=W=10    
+            else:
+                S=3
+                H=W=5    
    
             assert L == S * H * W, "input feature has wrong size"
             
@@ -449,36 +472,36 @@ class SwinTransformerBlock(nn.Module):
             return x
 
 
-        elif L==5600:
+        # elif L==5600:
             
-            mlp=self.mlp_tokens
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
+        #     mlp=self.mlp_tokens
+        #     shortcut = x
+        #     x = self.norm1(x).transpose(1, 2)
+        #     x= mlp(x).transpose(1, 2)
+        #     x = shortcut + self.drop_path(x)
+        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
+        #     return x
 
         
-        elif L==700:
+        # elif L==700:
             
-            mlp= self.mlp_tokens_1
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
+        #     mlp= self.mlp_tokens_1
+        #     shortcut = x
+        #     x = self.norm1(x).transpose(1, 2)
+        #     x= mlp(x).transpose(1, 2)
+        #     x = shortcut + self.drop_path(x)
+        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
+        #     return x
 
-        else:
+        # else:
             
-            mlp=self.mlp_tokens_2
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x    
+        #     mlp=self.mlp_tokens_2
+        #     shortcut = x
+        #     x = self.norm1(x).transpose(1, 2)
+        #     x= mlp(x).transpose(1, 2)
+        #     x = shortcut + self.drop_path(x)
+        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
+        #     return x    
           
         
         
