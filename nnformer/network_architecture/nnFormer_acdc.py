@@ -86,62 +86,119 @@ class SwinTransformerBlock_kv(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens = Mlp(in_features=5600, hidden_features=5600, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_1 = Mlp(in_features=700, hidden_features=700, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_2 = Mlp(in_features=75, hidden_features=75, act_layer=act_layer, drop=drop)
         
     def forward(self, x, mask_matrix,skip=None,x_up=None):
 
         assert self.shift_size==[0,0,0]
         B, L, C = x.shape
         S, H, W = self.input_resolution
-        assert L == S * H * W, "input feature has wrong size"
+        if True:
+            if L==22400:
+
+                S=14
+                H=W = 40
+            elif L==5600:
+                S=14
+                H=W=20
+            elif L==700:
+                S=7
+                H=W=10    
+            else:
+                S=3
+                H=W=5  
         
-        shortcut = x
-        skip = self.norm1(skip)
-        x_up = self.norm1(x_up)
+            #print(L)
+            assert L == S * H * W, "input feature has wrong size"
+            shortcut = x
+            skip = self.norm1(skip)
+            x_up = self.norm1(x_up)
 
-        skip = skip.view(B, S, H, W, C)
-        x_up = x_up.view(B, S, H, W, C)
+            skip = skip.view(B, S, H, W, C)
+            x_up = x_up.view(B, S, H, W, C)
 
-        # pad feature maps to multiples of window size
-        pad_r = (self.window_size[2] - W % self.window_size[2]) % self.window_size[2]
-        pad_b = (self.window_size[1] - H % self.window_size[1]) % self.window_size[1]
-        pad_g = (self.window_size[0] - S % self.window_size[0]) % self.window_size[0]
+            # pad feature maps to multiples of window size
+            pad_r = (self.window_size[2] - W % self.window_size[2]) % self.window_size[2]
+            pad_b = (self.window_size[1] - H % self.window_size[1]) % self.window_size[1]
+            pad_g = (self.window_size[0] - S % self.window_size[0]) % self.window_size[0]
 
-        skip = F.pad(skip, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  # pad�ĵ�һ�������Ӧ���һ��ά�ȣ����һ�������Ӧ��һ��ά��
-        _, Sp, Hp, Wp, _ = skip.shape
+            skip = F.pad(skip, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  # pad�ĵ��������Ӧ�����ά�ȣ�����������Ӧ����ά��
+            _, Sp, Hp, Wp, _ = skip.shape
         
-        x_up = F.pad(x_up, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  # pad�ĵ�һ�������Ӧ���һ��ά�ȣ����һ�������Ӧ��һ��ά��
-        # cyclic shift
-      
-        # partition windows
-        skip = window_partition(skip, self.window_size)  
-        skip = skip.view(-1, self.window_size[0] * self.window_size[1] * self.window_size[2],
-                                   C)  
-        x_up = window_partition(x_up, self.window_size)  
-        x_up = x_up.view(-1, self.window_size[0] * self.window_size[1] * self.window_size[2],
-                                   C)  
-        # W-MSA/SW-MSA
-        attn_windows=self.attn(skip,x_up)
+            x_up = F.pad(x_up, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  # pad�ĵ��������Ӧ�����ά�ȣ�����������Ӧ����ά��
+            # cyclic shift
+        
+            # partition windows
+            skip = window_partition(skip, self.window_size)  
+            skip = skip.view(-1, self.window_size[0] * self.window_size[1] * self.window_size[2],
+                                    C)  
+            x_up = window_partition(x_up, self.window_size)  
+            x_up = x_up.view(-1, self.window_size[0] * self.window_size[1] * self.window_size[2],
+                                    C)  
+            # W-MSA/SW-MSA
+            attn_windows=self.attn(skip,x_up)
 
-        # merge windows
-        attn_windows = attn_windows.view(-1, self.window_size[0], self.window_size[1], self.window_size[2], C)
-        shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp)  # B H' W' C
+            # merge windows
+            attn_windows = attn_windows.view(-1, self.window_size[0], self.window_size[1], self.window_size[2], C)
+            shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp)  # B H' W' C
 
-        # reverse cyclic shift
-        if min(self.shift_size) > 0:
-            x = torch.roll(shifted_x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]), dims=(1, 2, 3))
-        else:
-            x = shifted_x
+            # reverse cyclic shift
+            if min(self.shift_size) > 0:
+                x = torch.roll(shifted_x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]), dims=(1, 2, 3))
+            else:
+                x = shifted_x
 
-        if pad_r > 0 or pad_b > 0 or pad_g > 0:
-            x = x[:, :S, :H, :W, :].contiguous()
+            if pad_r > 0 or pad_b > 0 or pad_g > 0:
+                x = x[:, :S, :H, :W, :].contiguous()
 
-        x = x.view(B, S * H * W, C)
+            x = x.view(B, S * H * W, C)
+                
 
-        # FFN
-        x = shortcut + self.drop_path(x)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+           
 
-        return x
+            # FFN
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+
+            return x
+
+        # elif L==5600:
+            
+        #     mlp=self.mlp_tokens
+        #     shortcut = x
+        #     x = self.norm1(x).transpose(1, 2)
+        #     x= mlp(x).transpose(1, 2)
+        #     x = shortcut + self.drop_path(x)
+        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
+        #     return x
+
+        
+        # elif L==700:
+            
+        #     mlp= self.mlp_tokens_1
+        #     shortcut = x
+        #     x = self.norm1(x).transpose(1, 2)
+        #     x= mlp(x).transpose(1, 2)
+        #     x = shortcut + self.drop_path(x)
+        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
+        #     return x
+
+        # else:
+            
+        #     mlp=self.mlp_tokens_2
+        #     shortcut = x
+        #     x = self.norm1(x).transpose(1, 2)
+        #     x= mlp(x).transpose(1, 2)
+        #     x = shortcut + self.drop_path(x)
+        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
+        #     return x    
+              
+            
+
+        
+        
         
 class WindowAttention_kv(nn.Module):
    
@@ -327,11 +384,29 @@ class SwinTransformerBlock(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
+        
+        self.padding = [self.window_size[0] - self.shift_size[0], self.shift_size[0],
+                        self.window_size[1] - self.shift_size[1], self.shift_size[1],
+                        self.window_size[2]- self.shift_size[2], self.shift_size[2]]  # P_l,P_r,P_t,P_b
+
+        #self.norm1 = norm_layer(dim)
+        # use group convolution to implement multi-head MLP
+        self.spatial_mlp = nn.Conv1d(self.num_heads * self.window_size[0] *self.window_size[1]*self.window_size[2],
+                                     self.num_heads * self.window_size[0] *self.window_size[1]*self.window_size[2],
+                                     kernel_size=1,
+                                     groups=self.num_heads)
+        
+        self.mlp_tokens = Mlp(in_features=5600, hidden_features=5600, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_1 = Mlp(in_features=700, hidden_features=700, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_2 = Mlp(in_features=75, hidden_features=75, act_layer=act_layer, drop=drop)
+        self.m=Mlp(in_features=1280, hidden_features=1280, act_layer=act_layer, drop=drop)
         
        
     def forward(self, x, mask_matrix):
         """ Forward function.
-
         Args:
             x: Input feature, tensor size (B, H*W, C).
             H, W: Spatial resolution of the input feature.
@@ -340,62 +415,178 @@ class SwinTransformerBlock(nn.Module):
         
         B, L, C = x.shape
         S, H, W = self.input_resolution
+        if L==22400:
+            S=14
+            H=W = 40
+            #S= H=W = 32
+   
+            assert L == S * H * W, "input feature has wrong size"
+            shortcut = x
+            x = self.norm1(x)
+            x = x.view(B, S, H, W, C)
+
+            # pad feature maps to multiples of window size
+            pad_r = (self.window_size[2] - W % self.window_size[2]) % self.window_size[2]
+            pad_b = (self.window_size[1] - H % self.window_size[1]) % self.window_size[1]
+            pad_g = (self.window_size[0] - S % self.window_size[0]) % self.window_size[0]
+
+            x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
+            _, Sp, Hp, Wp, _ = x.shape
+
+            # cyclic shift
+            if min(self.shift_size) > 0:
+                shifted_x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1],-self.shift_size[2]), dims=(1, 2,3))
+                attn_mask = mask_matrix
+            else:
+                shifted_x = x
+                attn_mask = None
+
+            # partition windows
+            x_windows = window_partition(shifted_x, self.window_size)  
+            x_windows = x_windows.view(-1, self.window_size[0] * self.window_size[1] * self.window_size[2],
+                                    C)   
+            x_windows_heads = x_windows.view(-1, self.window_size[0] * self.window_size[1]*self.window_size[2], self.num_heads, C // self.num_heads)
+            x_windows_heads = x_windows_heads.transpose(1, 2)  # nW*B, nH, window_size*window_size, C//nH
+            x_windows_heads = x_windows_heads.reshape(-1, self.num_heads * self.window_size[0] * self.window_size[1]*self.window_size[2],
+                                                    C // self.num_heads)
+
+            spatial_mlp_windows = self.spatial_mlp(x_windows_heads)  # nW*B, nH*window_size*window_size, C//nH
+            spatial_mlp_windows = spatial_mlp_windows.view(-1, self.num_heads, self.window_size[0] * self.window_size[1]*self.window_size[2],
+                                                        C // self.num_heads).transpose(1, 2)
+            spatial_mlp_windows = spatial_mlp_windows.reshape(-1, self.window_size[0] * self.window_size[1]*self.window_size[2], C)                                          
+            attn_windows = spatial_mlp_windows.reshape(-1, self.window_size[0] ,self.window_size[1],self.window_size[2], C)
+            
+
+
+                            
+
+            # merge windows
+            #attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
+            shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp)  # B H' W' C
+
+            # reverse cyclic shift
+            if min(self.shift_size) > 0:
+                x = torch.roll(shifted_x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]), dims=(1, 2, 3))
+            else:
+                x = shifted_x
+
+            if pad_r > 0 or pad_b > 0 or pad_g > 0:
+                x = x[:, :S, :H, :W, :].contiguous()
+
+            x = x.view(B, S * H * W, C)
+
+            # FFN
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+
+            return x
+
+
+        elif False:    
+
+            S=14
+            H=W = 40
+            # elif L==5600:
+            #     S=14
+            #     H=W=20
+            # elif L==700:
+            #     S=7
+            #     H=W=10    
+            # else:
+            #     S=3
+            #     H=W=5    
+   
+            assert L == S * H * W, "input feature has wrong size"
+            
+            shortcut = x
+            x = self.norm1(x)
+            x = x.view(B, S, H, W, C)
+
+            # pad feature maps to multiples of window size
+            pad_r = (self.window_size[2] - W % self.window_size[2]) % self.window_size[2]
+            pad_b = (self.window_size[1] - H % self.window_size[1]) % self.window_size[1]
+            pad_g = (self.window_size[0] - S % self.window_size[0]) % self.window_size[0]
+
+            x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
+            _, Sp, Hp, Wp, _ = x.shape
+
+            # cyclic shift
+            if min(self.shift_size) > 0:
+                shifted_x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1],-self.shift_size[2]), dims=(1, 2,3))
+                attn_mask = mask_matrix
+            else:
+                shifted_x = x
+                attn_mask = None
+
+            # partition windows
+            x_windows = window_partition(shifted_x, self.window_size)  
+            x_windows = x_windows.view(C, self.window_size[0] * self.window_size[1] * self.window_size[2],
+                                    -1)  
+
+            # W-MSA/SW-MSA
         
-        assert L == S * H * W, "input feature has wrong size"
+            attn_windows=self.m(x_windows)
+            # merge windows
+            attn_windows = attn_windows.view(-1, self.window_size[0], self.window_size[1], self.window_size[2], C)
+            shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp)  # B H' W' C
+
+            # reverse cyclic shift
+            if min(self.shift_size) > 0:
+                x = torch.roll(shifted_x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]), dims=(1, 2, 3))
+            else:
+                x = shifted_x
+
+            if pad_r > 0 or pad_b > 0 or pad_g > 0:
+                x = x[:, :S, :H, :W, :].contiguous()
+
+            x = x.view(B, S * H * W, C)
+
+
+            
+
+            # FFN
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            return x
+
+
+        elif L==5600:
+            
+            mlp=self.mlp_tokens
+            shortcut = x
+            x = self.norm1(x).transpose(1, 2)
+            x= mlp(x).transpose(1, 2)
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            return x
+
         
-        shortcut = x
-        x = self.norm1(x)
-        x = x.view(B, S, H, W, C)
+        elif L==700:
+            
+            mlp= self.mlp_tokens_1
+            shortcut = x
+            x = self.norm1(x).transpose(1, 2)
+            x= mlp(x).transpose(1, 2)
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            return x
 
-        # pad feature maps to multiples of window size
-        pad_r = (self.window_size[2] - W % self.window_size[2]) % self.window_size[2]
-        pad_b = (self.window_size[1] - H % self.window_size[1]) % self.window_size[1]
-        pad_g = (self.window_size[0] - S % self.window_size[0]) % self.window_size[0]
-
-        x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-        _, Sp, Hp, Wp, _ = x.shape
-
-        # cyclic shift
-        if min(self.shift_size) > 0:
-            shifted_x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1],-self.shift_size[2]), dims=(1, 2,3))
-            attn_mask = mask_matrix
         else:
-            shifted_x = x
-            attn_mask = None
-
-        # partition windows
-        x_windows = window_partition(shifted_x, self.window_size)  
-        x_windows = x_windows.view(-1, self.window_size[0] * self.window_size[1] * self.window_size[2],
-                                   C)  
-
-        # W-MSA/SW-MSA
-       
-        attn_windows=self.attn(x_windows)
-        # merge windows
-        attn_windows = attn_windows.view(-1, self.window_size[0], self.window_size[1], self.window_size[2], C)
-        shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp)  # B H' W' C
-
-        # reverse cyclic shift
-        if min(self.shift_size) > 0:
-            x = torch.roll(shifted_x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]), dims=(1, 2, 3))
-        else:
-            x = shifted_x
-
-        if pad_r > 0 or pad_b > 0 or pad_g > 0:
-            x = x[:, :S, :H, :W, :].contiguous()
-
-        x = x.view(B, S * H * W, C)
-
-        # FFN
-        x = shortcut + self.drop_path(x)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
-
-        return x
+            
+            mlp=self.mlp_tokens_2
+            shortcut = x
+            x = self.norm1(x).transpose(1, 2)
+            x= mlp(x).transpose(1, 2)
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            return x    
+          
+        
+        
 
 
 class PatchMerging(nn.Module):
     """ Patch Merging Layer
-
     Args:
         dim (int): Number of input channels.
         norm_layer (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
@@ -553,7 +744,7 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock_kv(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
@@ -603,7 +794,7 @@ class BasicLayer_up(nn.Module):
         else:
             S, H, W = S , H * 2, W * 2
         attn_mask=None
-        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
+        x = self.blocks[0](x, attn_mask)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x,attn_mask)
         
@@ -943,8 +1134,4 @@ class nnFormer(SegmentationNetwork):
             seg_outputs.append(self.final[0](out[-1]))
             return seg_outputs[-1]
         
-        
-        
-   
-
    

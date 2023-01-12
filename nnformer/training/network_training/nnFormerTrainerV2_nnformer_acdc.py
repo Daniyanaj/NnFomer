@@ -1,18 +1,3 @@
-#    Copyright 2020 Division of Medical Image Computing, German Cancer Research Center (DKFZ), Heidelberg, Germany
-#
-#    Licensed under the Apache License, Version 2.0 (the "License");
-#    you may not use this file except in compliance with the License.
-#    You may obtain a copy of the License at
-#
-#        http://www.apache.org/licenses/LICENSE-2.0
-#
-#    Unless required by applicable law or agreed to in writing, software
-#    distributed under the License is distributed on an "AS IS" BASIS,
-#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#    See the License for the specific language governing permissions and
-#    limitations under the License.
-
-
 from collections import OrderedDict
 from typing import Tuple
 
@@ -175,18 +160,18 @@ class nnFormerTrainerV2_nnformer_acdc(nnFormerTrainer):
                                 window_size=self.window_size,
                                 down_stride=self.down_stride,
                                 deep_supervision=self.deep_supervision)
-        if self.load_pretrain_weight:
-            checkpoint = torch.load("/home/xychen/jsguo/weight/tumor_pretrain.model", map_location='cpu') # acdc and tumor use the same pretrain weight
-            ck={}
+        # if self.load_pretrain_weight:
+        #     checkpoint = torch.load("/home/xychen/jsguo/weight/tumor_pretrain.model", map_location='cpu') # acdc and tumor use the same pretrain weight
+        #     ck={}
             
-            for i in self.network.state_dict():
-                if i in checkpoint:
-                    print(i)
-                    ck.update({i:checkpoint[i]})
-                else:
-                    ck.update({i:self.network.state_dict()[i]})
-            self.network.load_state_dict(ck)
-            print('I am using the pre_train weight!!')
+        #     for i in self.network.state_dict():
+        #         if i in checkpoint:
+        #             print(i)
+        #             ck.update({i:checkpoint[i]})
+        #         else:
+        #             ck.update({i:self.network.state_dict()[i]})
+        #     self.network.load_state_dict(ck)
+        #     print('I am using the pre_train weight!!')
         
      
         if torch.cuda.is_available():
