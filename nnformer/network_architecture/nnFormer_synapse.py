@@ -432,7 +432,7 @@ class FocalModulation(nn.Module):
             self.ln = nn.LayerNorm(dim)
 
         for k in range(self.focal_level):
-            kernel_size = self.focal_factor*k + self.focal_window
+            kernel_size = self.focal_factor*k + self.focal_window-1
             self.focal_layers.append(
                 nn.Sequential(
                     nn.Conv2d(dim, dim, kernel_size=kernel_size, stride=1, groups=dim, 
@@ -581,9 +581,9 @@ class FocalModulationBlock(nn.Module):
         if self.use_layerscale:
             self.gamma_1 = nn.Parameter(layerscale_value * torch.ones((dim)), requires_grad=True)
             self.gamma_2 = nn.Parameter(layerscale_value * torch.ones((dim)), requires_grad=True)   
-        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)      
+        # self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        # self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)      
 
     def forward(self, x):
         """ Forward function.
@@ -620,33 +620,73 @@ class FocalModulationBlock(nn.Module):
             return x
         elif L==4096:
             
-            mlp=self.mlp_tokens
             shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            x = self.norm1(x)
+            x = x.view(B, H, W,S, C)
+            x=torch.split(x, 1, dim=3)
+            y=[]
+            for i in range(16):
+                a=x[i].view(B,H,W,C)
+                a=self.modulation(a)
+                a=a.view(B,H,W,1,C)
+                y.append(a)
+            x=torch.cat((y[0],y[1],y[2],y[3],y[4],y[5],y[6],y[7],y[8],y[9],y[10],y[11],y[12],y[13],y[14],y[15]),3)    
+
+            
+            # FM
+            x = x.view(B, H * W*S, C)
+
+            # FFN
+            x = shortcut + self.drop_path(self.gamma_1 * x)
+            x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
+
             return x
 
         
         elif L==512:
             
-            mlp= self.mlp_tokens_1
             shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            x = self.norm1(x)
+            x = x.view(B, H, W,S, C)
+            x=torch.split(x, 1, dim=3)
+            y=[]
+            for i in range(8):
+                a=x[i].view(B,H,W,C)
+                a=self.modulation(a)
+                a=a.view(B,H,W,1,C)
+                y.append(a)
+            x=torch.cat((y[0],y[1],y[2],y[3],y[4],y[5],y[6],y[7]),3)    
+
+            
+            # FM
+            x = x.view(B, H * W*S, C)
+
+            # FFN
+            x = shortcut + self.drop_path(self.gamma_1 * x)
+            x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
             return x
 
         else:
             
-            mlp=self.mlp_tokens_2
             shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            x = self.norm1(x)
+            x = x.view(B, H, W,S, C)
+            x=torch.split(x, 1, dim=3)
+            y=[]
+            for i in range(4):
+                a=x[i].view(B,H,W,C)
+                a=self.modulation(a)
+                a=a.view(B,H,W,1,C)
+                y.append(a)
+            x=torch.cat((y[0],y[1],y[2],y[3]),3)    
+
+            
+            # FM
+            x = x.view(B, H * W*S, C)
+
+            # FFN
+            x = shortcut + self.drop_path(self.gamma_1 * x)
+            x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
             return x    
             
 class PatchMerging(nn.Module):
@@ -726,7 +766,7 @@ class BasicLayer(nn.Module):
                 mlp_ratio=mlp_ratio,
                 drop=drop,
                 drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
-                focal_window=9, 
+                focal_window=window_size, 
                 focal_level=depth, 
                 use_layerscale=True, 
                 norm_layer=norm_layer)
@@ -787,7 +827,7 @@ class BasicLayer_up(nn.Module):
                 mlp_ratio=mlp_ratio,
                 drop=drop,
                 drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path,
-                focal_window=9, 
+                focal_window=window_size, 
                 focal_level=depth, 
                 use_layerscale=True, 
                 norm_layer=norm_layer))
@@ -800,7 +840,7 @@ class BasicLayer_up(nn.Module):
                 mlp_ratio=mlp_ratio,
                 drop=drop,
                 drop_path=drop_path[1] if isinstance(drop_path, list) else drop_path,
-                focal_window=9, 
+                focal_window=window_size, 
                 focal_level=depth, 
                 use_layerscale=True, 
                 norm_layer=norm_layer)
