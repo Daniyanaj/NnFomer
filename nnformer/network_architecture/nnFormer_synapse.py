@@ -1,3 +1,4 @@
+from re import X
 from einops import rearrange
 from copy import deepcopy
 from nnformer.utilities.nd_softmax import softmax_helper
@@ -384,7 +385,7 @@ class SwinTransformerBlock(nn.Module):
                                      groups=self.num_heads)
 
         
-        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        #self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
         self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
         self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
         #self.mlp_tokens_3 = Mlp(in_features=8, hidden_features=8, act_layer=act_layer, drop=drop)
@@ -426,24 +427,13 @@ class SwinTransformerBlock(nn.Module):
             # partition windows
             x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
             x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
-                                    C)  
-            x_windows_heads = x_windows.view(-1, self.window_size * self.window_size*self.window_size, self.num_heads, C // self.num_heads)
-            x_windows_heads = x_windows_heads.transpose(1, 2)  # nW*B, nH, window_size*window_size, C//nH
-            x_windows_heads = x_windows_heads.reshape(-1, self.num_heads * self.window_size * self.window_size*self.window_size,
-                                                    C // self.num_heads)
+                                    512)  
 
-            spatial_mlp_windows = self.spatial_mlp(x_windows_heads)  # nW*B, nH*window_size*window_size, C//nH
-            spatial_mlp_windows = spatial_mlp_windows.view(-1, self.num_heads, self.window_size * self.window_size*self.window_size,
-                                                        C // self.num_heads).transpose(1, 2)
-            spatial_mlp_windows = spatial_mlp_windows.reshape(-1, self.window_size * self.window_size*self.window_size, C)                                          
-            attn_windows = spatial_mlp_windows.reshape(-1, self.window_size, self.window_size,self.window_size, C)
-            
-
-
-                            
+            # W-MSA/SW-MSA
+            attn_windows = self.mlp_tokens_1(x_windows)
 
             # merge windows
-            #attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
+            attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
             shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp) 
 
             # reverse cyclic shift
@@ -463,20 +453,63 @@ class SwinTransformerBlock(nn.Module):
 
             return x
             
+            
            
 
 
         elif L==4096:
             
-            mlp=self.mlp_tokens
+            S= H=W = 16
+   
+            assert L == S * H * W, "input feature has wrong size"
             shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
+            x = self.norm1(x)
+            x = x.view(B, S, H, W, C)
+
+            # pad feature maps to multiples of window size
+            pad_r = (self.window_size - W % self.window_size) % self.window_size
+            pad_b = (self.window_size - H % self.window_size) % self.window_size
+            pad_g = (self.window_size - S % self.window_size) % self.window_size
+
+            x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
+            _, Sp, Hp, Wp, _ = x.shape
+
+            # cyclic shift
+            if self.shift_size > 0:
+                shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
+                attn_mask = mask_matrix
+            else:
+                shifted_x = x
+                attn_mask = None
+        
+            # partition windows
+            x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+            x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
+                                    64)  
+
+            # W-MSA/SW-MSA
+            attn_windows = self.mlp_tokens_2(x_windows)
+
+            # merge windows
+            attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
+            shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp) 
+
+            # reverse cyclic shift
+            if self.shift_size > 0:
+                x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size, self.shift_size), dims=(1, 2, 3))
+            else:
+                x = shifted_x
+
+            if pad_r > 0 or pad_b > 0 or pad_g > 0:
+                x = x[:, :S, :H, :W, :].contiguous()
+
+            x = x.view(B, S * H * W, C)
+
+            # FFN
             x = shortcut + self.drop_path(x)
             x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
 
-        
+            return x 
         elif L==512:
             
             mlp= self.mlp_tokens_1
@@ -495,10 +528,11 @@ class SwinTransformerBlock(nn.Module):
             x= mlp(x).transpose(1, 2)
             x = shortcut + self.drop_path(x)
             x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x    
-          
-
-        # FFN
+            return x   
+            
+            
+        
+            
         
 
 
