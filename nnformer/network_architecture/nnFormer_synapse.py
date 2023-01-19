@@ -33,11 +33,45 @@ class Mlp(nn.Module):
         self.act = act_layer()
         self.fc2 = nn.Linear(hidden_features, out_features)
         self.drop = nn.Dropout(drop)
-
+        self.conv=nn.Conv1d(hidden_features,hidden_features,3,stride=1,padding=1,groups=hidden_features)
     def forward(self, x):
+        B,L,C=x.shape
+        S=H=W= int(round((L)**(1/3)))
+
         x = self.fc1(x)
         x = self.act(x)
         x = self.drop(x)
+        x=x.view(B,-1,L)
+        x=self.conv(x)
+        x=x.view(B,L,-1)
+
+        x = self.fc2(x)
+        x = self.drop(x)
+        return x        
+
+class Mlp1(nn.Module):
+    """ Multilayer perceptron."""
+
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Linear(in_features, hidden_features)
+        self.act = act_layer()
+        self.fc2 = nn.Linear(hidden_features, out_features)
+        self.drop = nn.Dropout(drop)
+        self.conv=nn.Conv3d(hidden_features,hidden_features,3,stride=1,padding=1,groups=hidden_features)
+    def forward(self, x):
+        B,L,C=x.shape
+        S=H=W= int(round((L)**(1/3)))
+
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x=x.view(B,C,S,H,W)
+        x=self.conv(x)
+        x=x.view(B,L,C)
+
         x = self.fc2(x)
         x = self.drop(x)
         return x
@@ -84,9 +118,9 @@ class SwinTransformerBlock_kv(nn.Module):
                 dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
                 qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
 
-        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)        
+        self.mlp_tokens = Mlp1(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_1 = Mlp1(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_2 = Mlp1(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)        
         
         #self.window_size=to_3tuple(self.window_size)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -385,9 +419,9 @@ class SwinTransformerBlock(nn.Module):
                                      groups=self.num_heads)
 
         
-        #self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
+        self.mlp_tokens = Mlp1(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_1 = Mlp1(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        self.mlp_tokens_2 = Mlp1(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
         #self.mlp_tokens_3 = Mlp(in_features=8, hidden_features=8, act_layer=act_layer, drop=drop)
             
 
@@ -458,58 +492,15 @@ class SwinTransformerBlock(nn.Module):
 
 
         elif L==4096:
-            
-            S= H=W = 16
-   
-            assert L == S * H * W, "input feature has wrong size"
-            shortcut = x
-            x = self.norm1(x)
-            x = x.view(B, S, H, W, C)
-
-            # pad feature maps to multiples of window size
-            pad_r = (self.window_size - W % self.window_size) % self.window_size
-            pad_b = (self.window_size - H % self.window_size) % self.window_size
-            pad_g = (self.window_size - S % self.window_size) % self.window_size
-
-            x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-            _, Sp, Hp, Wp, _ = x.shape
-
-            # cyclic shift
-            if self.shift_size > 0:
-                shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
-                attn_mask = mask_matrix
-            else:
-                shifted_x = x
-                attn_mask = None
         
-            # partition windows
-            x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-            x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
-                                    64)  
-
-            # W-MSA/SW-MSA
-            attn_windows = self.mlp_tokens_2(x_windows)
-
-            # merge windows
-            attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
-            shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp) 
-
-            # reverse cyclic shift
-            if self.shift_size > 0:
-                x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size, self.shift_size), dims=(1, 2, 3))
-            else:
-                x = shifted_x
-
-            if pad_r > 0 or pad_b > 0 or pad_g > 0:
-                x = x[:, :S, :H, :W, :].contiguous()
-
-            x = x.view(B, S * H * W, C)
-
-            # FFN
+            mlp= self.mlp_tokens
+            shortcut = x
+            x = self.norm1(x).transpose(1, 2)
+            x= mlp(x).transpose(1, 2)
             x = shortcut + self.drop_path(x)
             x = x + self.drop_path(self.mlp(self.norm2(x)))
+            return x
 
-            return x 
         elif L==512:
             
             mlp= self.mlp_tokens_1
