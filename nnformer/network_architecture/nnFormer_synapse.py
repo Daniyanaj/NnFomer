@@ -59,7 +59,7 @@ def window_reverse(windows, window_size, S, H, W):
 
 
 
-class SwinTransformerBlock_kv(nn.Module):
+class SwinTransformerBlock(nn.Module):
 
 
     def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
@@ -402,7 +402,7 @@ class WindowAttention(nn.Module):
         x = self.proj_drop(x)
         return x
 
-class SwinTransformerBlock(nn.Module):
+class SwinTransformerBlock_kv(nn.Module):
     
     def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
                  mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., drop_path=0.,
@@ -604,7 +604,7 @@ class BasicLayer(nn.Module):
         # build blocks
         
         self.blocks = nn.ModuleList([
-            SwinTransformerBlock(
+            SwinTransformerBlock_kv(
                 dim=dim,
                 input_resolution=input_resolution,
                 num_heads=num_heads,
@@ -684,40 +684,58 @@ class BasicLayer_up(nn.Module):
         self.window_size = window_size
         self.shift_size = window_size // 2
         self.depth = depth
+        self.dim=dim
         
 
         # build blocks
-        self.blocks = nn.ModuleList()
-        self.blocks.append(
-            SwinTransformerBlock_kv(
+       
+        if self.dim==768:
+            self.blocks=nn.ModuleList([
+                SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
                     window_size=window_size,
-                    shift_size=0 ,
+                    shift_size=0 if (i % 2 == 0) else window_size // 2,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_scale=qk_scale,
                     drop=drop,
                     attn_drop=attn_drop,
-                    drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-                    )
-        for i in range(depth-1):
+                    drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+                for i in range(depth)])
+        else:        
+            self.blocks = nn.ModuleList()
             self.blocks.append(
                 SwinTransformerBlock_kv(
                         dim=dim,
                         input_resolution=input_resolution,
                         num_heads=num_heads,
                         window_size=window_size,
-                        shift_size=window_size // 2 ,
+                        shift_size=0 ,
                         mlp_ratio=mlp_ratio,
                         qkv_bias=qkv_bias,
                         qk_scale=qk_scale,
                         drop=drop,
                         attn_drop=attn_drop,
-                        drop_path=drop_path[i+1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+                        drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
                         )
-        
+            for i in range(depth-1):
+                self.blocks.append(
+                    SwinTransformerBlock_kv(
+                            dim=dim,
+                            input_resolution=input_resolution,
+                            num_heads=num_heads,
+                            window_size=window_size,
+                            shift_size=window_size // 2 ,
+                            mlp_ratio=mlp_ratio,
+                            qkv_bias=qkv_bias,
+                            qk_scale=qk_scale,
+                            drop=drop,
+                            attn_drop=attn_drop,
+                            drop_path=drop_path[i+1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+                            )
+            
 
         
         self.Upsample = upsample(dim=2*dim, norm_layer=norm_layer)
@@ -758,7 +776,7 @@ class BasicLayer_up(nn.Module):
         x = self.blocks[0](x, attn_mask)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x,attn_mask)
-        
+            
         return x, S, H, W
         
 class project(nn.Module):
