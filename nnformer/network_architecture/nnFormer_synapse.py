@@ -121,6 +121,37 @@ class AdaptiveFourierNeuralOperator(nn.Module):
         return x + bias    
 
 
+class Global_Filter(nn.Module):
+    def __init__(self, h=32, w=21, d=10, dim=1000):
+        super().__init__()
+        self.complex_weight = nn.Parameter(torch.randn(
+            h, w, d, dim, 2, dtype=torch.float32) * 0.02)
+        self.h = h
+        self.w = w
+        self.d = d
+
+    def forward(self, x):
+        B, N, C = x.shape
+        if N==32768:
+            S=H=W=32
+        elif N==4096:
+            S=H=W=16
+        elif N==512:
+            S=H=W=8
+        else:
+            S=H=W=4            
+        x = x.to(torch.float32)
+        x = x.view(B, S,H,W, C)
+        x = torch.fft.rfftn(x, dim=(1, 2, 3), norm='ortho')
+        l,m,n,o,p=x.shape
+        comp=nn.Parameter(torch.randn(
+            m,n,o,p, l, dtype=torch.float32) * 0.02).cuda()
+        weight = torch.view_as_complex(comp)
+        x = x * weight
+        x = torch.fft.irfftn(x, s=(S, H, W), dim=(1, 2, 3), norm='ortho')
+        x = x.reshape(B, N, C)
+        return x
+
 
 class SwinTransformerBlock(nn.Module):
 
@@ -145,7 +176,14 @@ class SwinTransformerBlock(nn.Module):
         #self.attn = WindowAttention(
         #         dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
         #         qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
-        self.attn = AdaptiveFourierNeuralOperator(dim,h=14,w=8)
+        if dim==192:
+            self.attn = Global_Filter(dim, 32, 32, 32)
+        elif dim==384:
+            self.attn = Global_Filter(dim, 16, 16, 16)    
+        elif dim==768:
+            self.attn = Global_Filter(dim,8, 8, 8) 
+        else:
+            self.attn = Global_Filter(dim, 4, 4, 4)        
 
         # self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
         # self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
