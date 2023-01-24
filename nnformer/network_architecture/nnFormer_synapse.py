@@ -200,28 +200,7 @@ class SwinTransformerBlock_kv(nn.Module):
             x = shortcut + self.drop_path(x)
             x = x + self.drop_path(self.mlp(self.norm2(x)))
             return x    
-class MLP(nn.Module):
-    def __init__(self, dim, mlp_ratio=4):
-        super().__init__()
 
-        self.norm = LayerNorm(dim, eps=1e-6, data_format="channels_first")
-        
-        self.fc1 = nn.Conv3d(dim, dim * mlp_ratio, 1)
-        self.pos = nn.Conv3d(dim * mlp_ratio, dim * mlp_ratio, 3, padding=1, groups=dim * mlp_ratio)
-        self.fc2 = nn.Conv3d(dim * mlp_ratio, dim, 1)
-        self.act = nn.GELU()
-
-    def forward(self, x):
-        B, C, H, W ,S= x.shape
-
-        
-        x = self.norm(x)
-        x = self.fc1(x)
-        x = self.act(x)
-        x = x + self.act(self.pos(x))
-        x = self.fc2(x)
-
-        return x
               
 class ConvMod(nn.Module):
     def __init__(self, dim):
@@ -242,68 +221,70 @@ class ConvMod(nn.Module):
         #     )    
         if dim==192:
             self.a = nn.Sequential(
-                    nn.Conv3d(dim, dim, 1),
-                    nn.GELU(),
-                    nn.Conv3d(dim, dim,5, padding=2, groups=1)
+                    nn.Conv3d(dim, dim, kernel_size=(1,1,11), padding=(0,0,5), groups=1),
+                    nn.Conv3d(dim, dim, kernel_size=(1,11,1), padding=(0,5,0),groups=1),
+                    nn.Conv3d(dim, dim, kernel_size=(11,1,1), padding=(5,0,0),groups=1),
+                    nn.Conv3d(dim, dim,3, padding=1, groups=1)
             )
         elif dim==384:
             self.a = nn.Sequential(
-                    nn.Conv3d(dim, dim, 1),
-                    nn.GELU(),
-                    nn.Conv3d(dim, dim,5, padding=2, groups=1)
-            )    
+                    nn.Conv3d(dim, dim, kernel_size=(1,1,9), padding=(0,0,4), groups=1),
+                    nn.Conv3d(dim, dim, kernel_size=(1,9,1), padding=(0,4,0),groups=1),
+                    nn.Conv3d(dim, dim, kernel_size=(9,1,1), padding=(4,0,0),groups=1),
+                    nn.Conv3d(dim, dim,3, padding=1, groups=1)
+            )        
         elif dim==768:
             self.a = nn.Sequential(
-                    nn.Conv3d(dim, dim, 1),
-                    nn.GELU(),
-                    nn.Conv3d(dim, dim, 3, padding=1, groups=1)
+                    nn.Conv3d(dim, dim, kernel_size=(1,1,5), padding=(0,0,2), groups=1),
+                    nn.Conv3d(dim, dim, kernel_size=(1,5,1), padding=(0,2,0),groups=1),
+                    nn.Conv3d(dim, dim, kernel_size=(5,1,1), padding=(2,0,0),groups=1),
+                    nn.Conv3d(dim, dim,3, padding=1, groups=1)
             )       
         else:
             self.a = nn.Sequential(
-                    nn.Conv3d(dim, dim, 1),
-                    nn.GELU(),
-                    nn.Conv3d(dim, dim, 3, padding=1, groups=1)
-            )    
-
+                    nn.Conv3d(dim, dim, kernel_size=(1,1,3), padding=(0,0,1), groups=1),
+                    nn.Conv3d(dim, dim, kernel_size=(1,3,1), padding=(0,1,0),groups=1),
+                    nn.Conv3d(dim, dim, kernel_size=(3,1,1), padding=(1,0,0),groups=1),
+                    nn.Conv3d(dim, dim,3, padding=1, groups=1)
+            )                            
         self.v = nn.Conv3d(dim, dim, 1)
-        self.proj = nn.Conv3d(dim, dim, 1)
+        
 
     def forward(self, x):
         B, C, H, W ,S= x.shape
+           
+        x = self.a(x)
         
-        x = self.norm(x)   
-        a = self.a(x)
-        x = a * self.v(x)
-        x = self.proj(x)
+        
 
         return x
 
-class Block(nn.Module):
-    def __init__(self, dim, mlp_ratio=4., drop_path=0.):
-        super().__init__()
+# class Block(nn.Module):
+#     def __init__(self, dim, mlp_ratio=4., drop_path=0.):
+#         super().__init__()
         
-        self.attn = ConvMod(dim)
-        self.mlp=Mlp(in_features=dim, hidden_features=dim, act_layer=nn.GELU, drop=0)
-        layer_scale_init_value = 1e-6           
-        self.layer_scale_1 = nn.Parameter(
-            layer_scale_init_value * torch.ones((dim)), requires_grad=True)
-        self.layer_scale_2 = nn.Parameter(
-            layer_scale_init_value * torch.ones((dim)), requires_grad=True)
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+#         self.attn = ConvMod(dim)
+#         self.mlp=Mlp(in_features=dim, hidden_features=dim, act_layer=nn.GELU, drop=0)
+#         layer_scale_init_value = 1e-6           
+#         self.layer_scale_1 = nn.Parameter(
+#             layer_scale_init_value * torch.ones((dim)), requires_grad=True)
+#         self.layer_scale_2 = nn.Parameter(
+#             layer_scale_init_value * torch.ones((dim)), requires_grad=True)
+#         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
-    def forward(self, x):
-        B,L,C=x.shape
-        H=W =S= int(round((L)**(1/3)))
-        x=x.view(B,C,H,W,S)
-        x = x + self.drop_path(self.layer_scale_1.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * self.attn(x))
-        q=x
-        x=x.view(B,L,C)
-        x=self.mlp(x)
-        x=x.view(B,C,H,W,S)
-        x = self.drop_path(self.layer_scale_2.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)*x)
-        x=q+x
-        x=x.view(B,L,C)
-        return x
+#     def forward(self, x):
+#         B,L,C=x.shape
+#         H=W =S= int(round((L)**(1/3)))
+#         x=x.view(B,C,H,W,S)
+        # x = x + self.drop_path(self.layer_scale_1.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * self.attn(x))
+        # q=x
+        # x=x.view(B,L,C)
+        # x=self.mlp(x)
+        # x=x.view(B,C,H,W,S)
+        # x = self.drop_path(self.layer_scale_2.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)*x)
+        # x=q+x
+        # x=x.view(B,L,C)
+        # return x
       
 class LayerNorm(nn.Module):
     r""" From ConvNeXt (https://arxiv.org/pdf/2201.03545.pdf)
@@ -483,123 +464,54 @@ class WindowAttention(nn.Module):
         x = self.proj_drop(x)
         return x
 
-class SwinTransformerBlock(nn.Module):
+class Block(nn.Module):
     
-    def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
-                 mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., drop_path=0.,
-                 act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+    def __init__(self, dim, mlp_ratio=4., drop_path=0.):
         super().__init__()
         self.dim = dim
-        self.input_resolution = input_resolution
-        self.num_heads = num_heads
-        self.window_size = window_size
-        self.shift_size = shift_size
+        # self.input_resolution = input_resolution
+        # self.num_heads = num_heads
+        # self.window_size = window_size
+        # self.shift_size = shift_size
         self.mlp_ratio = mlp_ratio
+        norm_layer=nn.LayerNorm
    
-        if min(self.input_resolution) <= self.window_size:
-            # if window size is larger than input resolution, we don't partition windows
-            self.shift_size = 0
-            self.window_size = min(self.input_resolution)
-
-        assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
+        
+            
 
         self.norm1 = norm_layer(dim)
         
-        self.attn = WindowAttention(
-            dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
-            qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
-        # self.padding = [self.window_size - self.shift_size, self.shift_size,
-        #                 self.window_size - self.shift_size, self.shift_size,
-        #                 self.window_size - self.shift_size, self.shift_size]  # P_l,P_r,P_t,P_b
-
-        # self.norm1 = norm_layer(dim)
-        # # use group convolution to implement multi-head MLP
-        # self.spatial_mlp = nn.Conv1d(self.num_heads * self.window_size ** 3,
-        #                              self.num_heads * self.window_size ** 3,
-        #                              kernel_size=1,
-        #                              groups=self.num_heads)
-
+        self.attn = ConvMod(dim)
         
-        self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
-        #self.mlp_tokens_3 = Mlp(in_features=8, hidden_features=8, act_layer=act_layer, drop=drop)
             
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=nn.GELU, drop=0)
         
        
-    def forward(self, x, mask_matrix):
+    def forward(self, x):
 
         B, L, C = x.shape
-        if L==32768:
-            S= H=W = 32
-   
-            assert L == S * H * W, "input feature has wrong size"
-            shortcut = x
-            x = self.norm1(x)
-            x = x.view(B, S, H, W, C)
+        H=W =S= int(round((L)**(1/3)))
+ 
+        assert L == S * H * W, "input feature has wrong size"
+        shortcut = x
+        x = self.norm1(x)
+        x=x.view(B,C,S,H,W)
+        x= self.attn(x)
+        x=x.view(B,L,C)
+        x = shortcut + self.drop_path(x)
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        return x
 
-            # pad feature maps to multiples of window size
-            pad_r = (self.window_size - W % self.window_size) % self.window_size
-            pad_b = (self.window_size - H % self.window_size) % self.window_size
-            pad_g = (self.window_size - S % self.window_size) % self.window_size
-
-            x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-            _, Sp, Hp, Wp, _ = x.shape
-
-            # cyclic shift
-            if self.shift_size > 0:
-                shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
-                attn_mask = mask_matrix
-            else:
-                shifted_x = x
-                attn_mask = None
-        
-            # partition windows
-            x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-            x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
-                                    512)  
-
-            # W-MSA/SW-MSA
-            attn_windows = self.mlp_tokens_1(x_windows)
-
-            # merge windows
-            attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
-            shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp) 
-
-            # reverse cyclic shift
-            if self.shift_size > 0:
-                x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size, self.shift_size), dims=(1, 2, 3))
-            else:
-                x = shifted_x
-
-            if pad_r > 0 or pad_b > 0 or pad_g > 0:
-                x = x[:, :S, :H, :W, :].contiguous()
-
-            x = x.view(B, S * H * W, C)
-
-            # FFN
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-
-            return x
-            
-            
+          
            
 
 
-        elif L==4096:
-            mlp= self.mlp_tokens
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
+        
+            
             
             # S= H=W = 16
    
@@ -652,25 +564,25 @@ class SwinTransformerBlock(nn.Module):
             # x = x + self.drop_path(self.mlp(self.norm2(x)))
 
             # return x 
-        elif L==512:
+        # elif L==512:
             
-            mlp= self.mlp_tokens_1
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
+        #     mlp= self.mlp_tokens_1
+        #     shortcut = x
+        #     x = self.norm1(x).transpose(1, 2)
+        #     x= mlp(x).transpose(1, 2)
+        #     x = shortcut + self.drop_path(x)
+        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
+        #     return x
 
-        else:
+        # else:
             
-            mlp=self.mlp_tokens_2
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x   
+        #     mlp=self.mlp_tokens_2
+        #     shortcut = x
+        #     x = self.norm1(x).transpose(1, 2)
+        #     x= mlp(x).transpose(1, 2)
+        #     x = shortcut + self.drop_path(x)
+        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
+        #     return x   
             
             
         
