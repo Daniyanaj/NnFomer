@@ -59,7 +59,7 @@ def window_reverse(windows, window_size, S, H, W):
 
 
 
-class SwinTransformerBlock(nn.Module):
+class SwinTransformerBlock_kv(nn.Module):
 
 
     def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
@@ -79,12 +79,10 @@ class SwinTransformerBlock(nn.Module):
         assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
 
         self.norm1 = norm_layer(dim)
-        # self.attn = WindowAttention(
-        #         dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
-        #         qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
-        self.attn = WindowAttention(
-            dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
-            qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
+                 
+        self.attn = WindowAttention_kv(
+                dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
+                qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
 
         self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
         self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
@@ -96,154 +94,103 @@ class SwinTransformerBlock(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
        
-    def forward(self, x, mask_matrix):
+    def forward(self, x, mask_matrix,skip=None,x_up=None):
     
         B, L, C = x.shape
-        S= H=W = self.input_resolution[0]
-   
-        assert L == S * H * W, "input feature has wrong size"
         
-        shortcut = x
-        x = self.norm1(x)
-        x = x.view(B, S, H, W, C)
-
-        # pad feature maps to multiples of window size
-        pad_r = (self.window_size - W % self.window_size) % self.window_size
-        pad_b = (self.window_size - H % self.window_size) % self.window_size
-        pad_g = (self.window_size - S % self.window_size) % self.window_size
-
-        x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-        _, Sp, Hp, Wp, _ = x.shape
-
-        # cyclic shift
-        if self.shift_size > 0:
-            shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
-            attn_mask = mask_matrix
-        else:
-            shifted_x = x
-            attn_mask = None
-    
-        #partition windows
-        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-        x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
-                                C)  
-
-        # W-MSA/SW-MSA
-        attn_windows = self.attn(x_windows, mask=attn_mask,pos_embed=None)  
-
-        # merge windows
-        attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
-        shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp) 
-
-        # reverse cyclic shift
-        if self.shift_size > 0:
-            x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size, self.shift_size), dims=(1, 2, 3))
-        else:
-            x = shifted_x
-
-        if pad_r > 0 or pad_b > 0 or pad_g > 0:
-            x = x[:, :S, :H, :W, :].contiguous()
-
-        x = x.view(B, S * H * W, C)
-
-        # FFN
-        x = shortcut + self.drop_path(x)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
-        return x
 
 
-        # if L==32768:
-        #     S= H= W = 32
+        if L==32768:
+            S= H= W = 32
             
-        #     assert L == S * H * W, "input feature has wrong size"
+            assert L == S * H * W, "input feature has wrong size"
             
-        #     shortcut = x
-        #     skip = self.norm1(skip)
-        #     x_up = self.norm1(x_up)
+            shortcut = x
+            skip = self.norm1(skip)
+            x_up = self.norm1(x_up)
 
-        #     skip = skip.view(B, S, H, W, C)
-        #     x_up = x_up.view(B, S, H, W, C)
-        #     x = x.view(B, S, H, W, C)
-        #     # pad feature maps to multiples of window size
-        #     pad_r = (self.window_size - W % self.window_size) % self.window_size
-        #     pad_b = (self.window_size - H % self.window_size) % self.window_size
-        #     pad_g = (self.window_size - S % self.window_size) % self.window_size
+            skip = skip.view(B, S, H, W, C)
+            x_up = x_up.view(B, S, H, W, C)
+            x = x.view(B, S, H, W, C)
+            # pad feature maps to multiples of window size
+            pad_r = (self.window_size - W % self.window_size) % self.window_size
+            pad_b = (self.window_size - H % self.window_size) % self.window_size
+            pad_g = (self.window_size - S % self.window_size) % self.window_size
 
-        #     skip = F.pad(skip, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-        #     x_up = F.pad(x_up, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-        #     _, Sp, Hp, Wp, _ = skip.shape
+            skip = F.pad(skip, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
+            x_up = F.pad(x_up, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
+            _, Sp, Hp, Wp, _ = skip.shape
 
        
         
-        #     # cyclic shift
-        #     if self.shift_size > 0:
-        #         skip = torch.roll(skip, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
-        #         x_up = torch.roll(x_up, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
-        #         attn_mask = mask_matrix
-        #     else:
-        #         skip = skip
-        #         x_up=x_up
-        #         attn_mask = None
-        #     # partition windows
-        #     skip = window_partition(skip, self.window_size) 
-        #     skip = skip.view(-1, self.window_size * self.window_size * self.window_size,
-        #                             C)  
-        #     x_up = window_partition(x_up, self.window_size) 
-        #     x_up = x_up.view(-1, self.window_size * self.window_size * self.window_size,
-        #                             512)  
-        #     attn_windows=self.mlp_tokens_1(x_up)
+            # cyclic shift
+            if self.shift_size > 0:
+                skip = torch.roll(skip, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
+                x_up = torch.roll(x_up, shifts=(-self.shift_size, -self.shift_size,-self.shift_size), dims=(1, 2,3))
+                attn_mask = mask_matrix
+            else:
+                skip = skip
+                x_up=x_up
+                attn_mask = None
+            skip = window_partition(skip, self.window_size) 
+            skip = skip.view(-1, self.window_size * self.window_size * self.window_size,
+                                    C)  
+            x_up = window_partition(x_up, self.window_size) 
+            x_up = x_up.view(-1, self.window_size * self.window_size * self.window_size,
+                                    C)  
+            attn_windows=self.attn(skip,x_up,mask=attn_mask,pos_embed=None)
 
-        #     # merge windows
-        #     attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
-        #     shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp)  # B H' W' C
+            # merge windows
+            attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
+            shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp)  # B H' W' C
 
-        #     # reverse cyclic shift
-        #     if self.shift_size > 0:
-        #         x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size, self.shift_size), dims=(1, 2, 3))
-        #     else:
-        #         x = shifted_x
+            # reverse cyclic shift
+            if self.shift_size > 0:
+                x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size, self.shift_size), dims=(1, 2, 3))
+            else:
+                x = shifted_x
 
-        #     if pad_r > 0 or pad_b > 0 or pad_g > 0:
-        #         x = x[:, :S, :H, :W, :].contiguous()
+            if pad_r > 0 or pad_b > 0 or pad_g > 0:
+                x = x[:, :S, :H, :W, :].contiguous()
 
-        #     x = x.view(B, S * H * W, C)
+            x = x.view(B, S * H * W, C)
 
-        #     # FFN
-        #     x = shortcut + self.drop_path(x)
-        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
+            # FFN
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
 
-        #     return x
+            return x
 
-        # elif L==4096:
+        elif L==4096:
             
-        #     mlp=self.mlp_tokens
-        #     shortcut = x
-        #     x = self.norm1(x).transpose(1, 2)
-        #     x= mlp(x).transpose(1, 2)
-        #     x = shortcut + self.drop_path(x)
-        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
-        #     return x
+            mlp=self.mlp_tokens
+            shortcut = x
+            x = self.norm1(x).transpose(1, 2)
+            x= mlp(x).transpose(1, 2)
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            return x
 
         
-        # elif L==512:
+        elif L==512:
             
-        #     mlp= self.mlp_tokens_1
-        #     shortcut = x
-        #     x = self.norm1(x).transpose(1, 2)
-        #     x= mlp(x).transpose(1, 2)
-        #     x = shortcut + self.drop_path(x)
-        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
-        #     return x
+            mlp= self.mlp_tokens_1
+            shortcut = x
+            x = self.norm1(x).transpose(1, 2)
+            x= mlp(x).transpose(1, 2)
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            return x
 
-        # else:
+        else:
             
-        #     mlp=self.mlp_tokens_2
-        #     shortcut = x
-        #     x = self.norm1(x).transpose(1, 2)
-        #     x= mlp(x).transpose(1, 2)
-        #     x = shortcut + self.drop_path(x)
-        #     x = x + self.drop_path(self.mlp(self.norm2(x)))
-        #     return x    
+            mlp=self.mlp_tokens_2
+            shortcut = x
+            x = self.norm1(x).transpose(1, 2)
+            x= mlp(x).transpose(1, 2)
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            return x    
               
             
 
@@ -402,7 +349,7 @@ class WindowAttention(nn.Module):
         x = self.proj_drop(x)
         return x
 
-class SwinTransformerBlock_kv(nn.Module):
+class SwinTransformerBlock(nn.Module):
     
     def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
                  mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., drop_path=0.,
@@ -471,10 +418,10 @@ class SwinTransformerBlock_kv(nn.Module):
             # partition windows
             x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
             x_windows = x_windows.view(-1, self.window_size * self.window_size * self.window_size,
-                                    512)  
+                                   C)  
 
             # W-MSA/SW-MSA
-            attn_windows = self.mlp_tokens_1(x_windows) 
+            attn_windows = self.attn(x_windows, mask=attn_mask,pos_embed=None)  
 
             # merge windows
             attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
@@ -604,7 +551,7 @@ class BasicLayer(nn.Module):
         # build blocks
         
         self.blocks = nn.ModuleList([
-            SwinTransformerBlock_kv(
+            SwinTransformerBlock(
                 dim=dim,
                 input_resolution=input_resolution,
                 num_heads=num_heads,
@@ -689,52 +636,37 @@ class BasicLayer_up(nn.Module):
 
         # build blocks
        
-        if self.dim==768:
-            self.blocks=nn.ModuleList([
-                SwinTransformerBlock(
+        
+        self.blocks = nn.ModuleList()
+        self.blocks.append(
+            SwinTransformerBlock_kv(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
                     window_size=window_size,
-                    shift_size=0 if (i % 2 == 0) else window_size // 2,
+                    shift_size=0 ,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_scale=qk_scale,
                     drop=drop,
                     attn_drop=attn_drop,
-                    drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-                for i in range(depth)])
-        else:        
-            self.blocks = nn.ModuleList()
+                    drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+                    )
+        for i in range(depth-1):
             self.blocks.append(
-                SwinTransformerBlock_kv(
+                SwinTransformerBlock(
                         dim=dim,
                         input_resolution=input_resolution,
                         num_heads=num_heads,
                         window_size=window_size,
-                        shift_size=0 ,
+                        shift_size=window_size // 2 ,
                         mlp_ratio=mlp_ratio,
                         qkv_bias=qkv_bias,
                         qk_scale=qk_scale,
                         drop=drop,
                         attn_drop=attn_drop,
-                        drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+                        drop_path=drop_path[i+1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
                         )
-            for i in range(depth-1):
-                self.blocks.append(
-                    SwinTransformerBlock_kv(
-                            dim=dim,
-                            input_resolution=input_resolution,
-                            num_heads=num_heads,
-                            window_size=window_size,
-                            shift_size=window_size // 2 ,
-                            mlp_ratio=mlp_ratio,
-                            qkv_bias=qkv_bias,
-                            qk_scale=qk_scale,
-                            drop=drop,
-                            attn_drop=attn_drop,
-                            drop_path=drop_path[i+1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-                            )
             
 
         
@@ -773,7 +705,7 @@ class BasicLayer_up(nn.Module):
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x, attn_mask)
+        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x,attn_mask)
             
