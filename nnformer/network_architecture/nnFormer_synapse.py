@@ -344,6 +344,8 @@ class LePEAttention(nn.Module):
             H_sp, W_sp , S_sp= self.resolution[0], self.split_size, self.split_size
         elif idx == 1:
             W_sp, H_sp,S_sp = self.resolution[0], self.split_size,self.split_size
+        elif idx == 2:
+            S_sp , W_sp, H_sp= self.resolution[0], self.split_size,self.split_size    
         else:
             print ("ERROR MODE", idx)
             exit(0)
@@ -428,7 +430,7 @@ class SwinTransformerBlock(nn.Module):
         if last_stage:
             self.branch_num = 1
         else:
-            self.branch_num = 2
+            self.branch_num = 3
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(drop)
         
@@ -442,8 +444,8 @@ class SwinTransformerBlock(nn.Module):
         else:
             self.attns = nn.ModuleList([
                 LePEAttention(
-                    dim//2, resolution=self.patches_resolution, idx = i,
-                    split_size=split_size, num_heads=num_heads//2, dim_out=dim//2,
+                    dim//3, resolution=self.patches_resolution, idx = i,
+                    split_size=split_size, num_heads=num_heads//3, dim_out=dim//3,
                     qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
                 for i in range(self.branch_num)])
         
@@ -465,10 +467,12 @@ class SwinTransformerBlock(nn.Module):
         img = self.norm1(x)
         qkv = self.qkv(img).reshape(B, -1, 3, C).permute(2, 0, 1, 3)
         
-        if self.branch_num == 2:
-            x1 = self.attns[0](qkv[:,:,:,:C//2])
-            x2 = self.attns[1](qkv[:,:,:,C//2:])
-            attened_x = torch.cat([x1,x2], dim=2)
+        if self.branch_num == 3:
+            x1 = self.attns[0](qkv[:,:,:,:C//3])
+            x2 = self.attns[1](qkv[:,:,:,C//3:2*C//3])
+            x3 = self.attns[2](qkv[:,:,:,2*C//3:])
+            attened_x = torch.cat([x1,x2,x3], dim=2)
+
         else:
             attened_x = self.attns[0](qkv)
         attened_x = self.proj(attened_x)
@@ -643,51 +647,51 @@ class BasicLayer(nn.Module):
         self.shift_size = window_size // 2
         self.depth = depth
         # build blocks
-        self.blocks = nn.ModuleList()
-        self.blocks.append(
-            pSwinTransformerBlock(
-                    dim=dim,
-                    input_resolution=input_resolution,
-                    num_heads=num_heads,
-                    window_size=window_size,
-                    shift_size=0,
-                    mlp_ratio=mlp_ratio,
-                    qkv_bias=qkv_bias,
-                    qk_scale=qk_scale,
-                    drop=drop,
-                    attn_drop=attn_drop,
-                    drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-                    )
-        for i in range(depth-1):
-            self.blocks.append(
-                SwinTransformerBlock(
-                        dim=dim,
-                        input_resolution=input_resolution,
-                        num_heads=num_heads,
-                        window_size=window_size,
+        # self.blocks = nn.ModuleList()
+        # self.blocks.append(
+        #     pSwinTransformerBlock(
+        #             dim=dim,
+        #             input_resolution=input_resolution,
+        #             num_heads=num_heads,
+        #             window_size=window_size,
+        #             shift_size=0,
+        #             mlp_ratio=mlp_ratio,
+        #             qkv_bias=qkv_bias,
+        #             qk_scale=qk_scale,
+        #             drop=drop,
+        #             attn_drop=attn_drop,
+        #             drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+        #             )
+        # for i in range(depth-1):
+        #     self.blocks.append(
+        #         SwinTransformerBlock(
+                        # dim=dim,
+                        # input_resolution=input_resolution,
+                        # num_heads=num_heads,
+                        # window_size=window_size,
                         
-                        mlp_ratio=mlp_ratio,
-                        qkv_bias=qkv_bias,
-                        qk_scale=qk_scale,
-                        drop=drop,
-                        attn_drop=attn_drop,
-                        drop_path=drop_path[i+1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-                        )
+                        # mlp_ratio=mlp_ratio,
+                        # qkv_bias=qkv_bias,
+                        # qk_scale=qk_scale,
+                        # drop=drop,
+                        # attn_drop=attn_drop,
+                        # drop_path=drop_path[i+1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+                        # )
         
-        # self.blocks = nn.ModuleList([
-        #     SwinTransformerBlock(
-        #         dim=dim,
-        #         input_resolution=input_resolution,
-        #         num_heads=num_heads,
-        #         window_size=window_size,
-        #         # shift_size=0 if (i % 2 == 0) else window_size // 2,
-        #         mlp_ratio=mlp_ratio,
-        #         qkv_bias=qkv_bias,
-        #         qk_scale=qk_scale,
-        #         drop=drop,
-        #         attn_drop=attn_drop,
-        #         drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-        #     for i in range(depth)])
+        self.blocks = nn.ModuleList([
+            SwinTransformerBlock(
+                dim=dim,
+                input_resolution=input_resolution,
+                num_heads=num_heads,
+                window_size=window_size,
+                # shift_size=0 if (i % 2 == 0) else window_size // 2,
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                qk_scale=qk_scale,
+                drop=drop,
+                attn_drop=attn_drop,
+                drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+            for i in range(depth)])
 
         # patch merging layer
         if downsample is not None:
@@ -727,7 +731,7 @@ class BasicLayer(nn.Module):
         # for blk in self.blocks:
           
         #     x = blk(x)
-        x = self.blocks[0](x,attn_mask)
+        x = self.blocks[0](x)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x)
         
@@ -764,12 +768,12 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            pSwinTransformerBlock(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
                     window_size=window_size,
-                    shift_size=0,
+                    #shift_size=0,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_scale=qk_scale,
@@ -830,7 +834,7 @@ class BasicLayer_up(nn.Module):
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x,attn_mask)
+        x = self.blocks[0](x)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x)
         
