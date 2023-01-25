@@ -224,37 +224,37 @@ class ConvMod(nn.Module):
                     nn.Conv3d(dim, dim, kernel_size=(1,1,11), padding=(0,0,5), groups=1),
                     nn.Conv3d(dim, dim, kernel_size=(1,11,1), padding=(0,5,0),groups=1),
                     nn.Conv3d(dim, dim, kernel_size=(11,1,1), padding=(5,0,0),groups=1),
-                    nn.Conv3d(dim, dim,3, padding=1, groups=1)
+                    # nn.Conv3d(dim, dim,3, padding=1, groups=1)
             )
         elif dim==384:
             self.a = nn.Sequential(
                     nn.Conv3d(dim, dim, kernel_size=(1,1,9), padding=(0,0,4), groups=1),
                     nn.Conv3d(dim, dim, kernel_size=(1,9,1), padding=(0,4,0),groups=1),
                     nn.Conv3d(dim, dim, kernel_size=(9,1,1), padding=(4,0,0),groups=1),
-                    nn.Conv3d(dim, dim,3, padding=1, groups=1)
+                    # nn.Conv3d(dim, dim,3, padding=1, groups=1)
             )        
         elif dim==768:
             self.a = nn.Sequential(
                     nn.Conv3d(dim, dim, kernel_size=(1,1,5), padding=(0,0,2), groups=1),
                     nn.Conv3d(dim, dim, kernel_size=(1,5,1), padding=(0,2,0),groups=1),
                     nn.Conv3d(dim, dim, kernel_size=(5,1,1), padding=(2,0,0),groups=1),
-                    nn.Conv3d(dim, dim,3, padding=1, groups=1)
+                    # nn.Conv3d(dim, dim,3, padding=1, groups=1)
             )       
         else:
             self.a = nn.Sequential(
                     nn.Conv3d(dim, dim, kernel_size=(1,1,3), padding=(0,0,1), groups=1),
                     nn.Conv3d(dim, dim, kernel_size=(1,3,1), padding=(0,1,0),groups=1),
                     nn.Conv3d(dim, dim, kernel_size=(3,1,1), padding=(1,0,0),groups=1),
-                    nn.Conv3d(dim, dim,3, padding=1, groups=1)
+                    # nn.Conv3d(dim, dim,3, padding=1, groups=1)
             )                            
-        self.v = nn.Conv3d(dim, dim, 1)
+        self.v = nn.Conv3d(dim, dim, 3,padding=1,groups=1)
         
 
     def forward(self, x):
         B, C, H, W ,S= x.shape
-           
+        xA=x   
         x = self.a(x)
-        
+        x=x+self.v(xA)
         
 
         return x
