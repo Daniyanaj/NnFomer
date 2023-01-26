@@ -91,19 +91,19 @@ class ConvMod(nn.Module):
             self.a = nn.Sequential(
                     nn.Conv3d(dim, dim, 1),
                     nn.GELU(),
-                    nn.Conv3d(dim, dim,7, padding=3, groups=dim)
+                    nn.Conv3d(dim, dim,7, padding=3, groups=dim//2)
             )    
         elif dim==768:
             self.a = nn.Sequential(
                     nn.Conv3d(dim, dim, 1),
                     nn.GELU(),
-                    nn.Conv3d(dim, dim, 7, padding=3, groups=dim)
+                    nn.Conv3d(dim, dim, 7, padding=3, groups=dim//4)
             )       
         else:
             self.a = nn.Sequential(
                     nn.Conv3d(dim, dim, 1),
                     nn.GELU(),
-                    nn.Conv3d(dim, dim, 3, padding=1, groups=dim)
+                    nn.Conv3d(dim, dim, 3, padding=1, groups=dim//8)
             )    
 
         self.v = nn.Conv3d(dim, dim, 1)
