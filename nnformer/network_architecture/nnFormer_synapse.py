@@ -647,51 +647,51 @@ class BasicLayer(nn.Module):
         self.shift_size = window_size // 2
         self.depth = depth
         # build blocks
-        # self.blocks = nn.ModuleList()
-        # self.blocks.append(
-        #     pSwinTransformerBlock(
-        #             dim=dim,
-        #             input_resolution=input_resolution,
-        #             num_heads=num_heads,
-        #             window_size=window_size,
-        #             shift_size=0,
-        #             mlp_ratio=mlp_ratio,
-        #             qkv_bias=qkv_bias,
-        #             qk_scale=qk_scale,
-        #             drop=drop,
-        #             attn_drop=attn_drop,
-        #             drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-        #             )
-        # for i in range(depth-1):
-        #     self.blocks.append(
-        #         SwinTransformerBlock(
-                        # dim=dim,
-                        # input_resolution=input_resolution,
-                        # num_heads=num_heads,
-                        # window_size=window_size,
+        self.blocks = nn.ModuleList()
+        self.blocks.append(
+            pSwinTransformerBlock(
+                    dim=dim,
+                    input_resolution=input_resolution,
+                    num_heads=num_heads,
+                    window_size=window_size,
+                    shift_size=0,
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    drop=drop,
+                    attn_drop=attn_drop,
+                    drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+                    )
+        for i in range(depth-1):
+            self.blocks.append(
+                SwinTransformerBlock(
+                        dim=dim,
+                        input_resolution=input_resolution,
+                        num_heads=num_heads,
+                        window_size=window_size,
                         
-                        # mlp_ratio=mlp_ratio,
-                        # qkv_bias=qkv_bias,
-                        # qk_scale=qk_scale,
-                        # drop=drop,
-                        # attn_drop=attn_drop,
-                        # drop_path=drop_path[i+1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-                        # )
+                        mlp_ratio=mlp_ratio,
+                        qkv_bias=qkv_bias,
+                        qk_scale=qk_scale,
+                        drop=drop,
+                        attn_drop=attn_drop,
+                        drop_path=drop_path[i+1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+                        )
         
-        self.blocks = nn.ModuleList([
-            SwinTransformerBlock(
-                dim=dim,
-                input_resolution=input_resolution,
-                num_heads=num_heads,
-                window_size=window_size,
-                # shift_size=0 if (i % 2 == 0) else window_size // 2,
-                mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                qk_scale=qk_scale,
-                drop=drop,
-                attn_drop=attn_drop,
-                drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
-            for i in range(depth)])
+        # self.blocks = nn.ModuleList([
+        #     SwinTransformerBlock(
+        #         dim=dim,
+        #         input_resolution=input_resolution,
+        #         num_heads=num_heads,
+        #         window_size=window_size,
+        #         # shift_size=0 if (i % 2 == 0) else window_size // 2,
+        #         mlp_ratio=mlp_ratio,
+        #         qkv_bias=qkv_bias,
+        #         qk_scale=qk_scale,
+        #         drop=drop,
+        #         attn_drop=attn_drop,
+        #         drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+        #     for i in range(depth)])
 
         # patch merging layer
         if downsample is not None:
@@ -731,7 +731,7 @@ class BasicLayer(nn.Module):
         # for blk in self.blocks:
           
         #     x = blk(x)
-        x = self.blocks[0](x)
+        x = self.blocks[0](x,attn_mask)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x)
         
@@ -768,12 +768,12 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock(
+            pSwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
                     window_size=window_size,
-                    #shift_size=0,
+                    shift_size=0,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_scale=qk_scale,
@@ -834,7 +834,7 @@ class BasicLayer_up(nn.Module):
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x)
+        x = self.blocks[0](x,attn_mask)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x)
         
