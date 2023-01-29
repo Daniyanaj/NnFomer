@@ -85,25 +85,25 @@ class ConvMod(nn.Module):
             self.a = nn.Sequential(
                     nn.Conv3d(dim, dim, 1),
                     nn.GELU(),
-                    nn.Conv3d(dim, dim,(1,1,7), padding=(0,0,3), groups=1),
-                    nn.Conv3d(dim, dim,(1,7,1), padding=(0,3,0), groups=1),
-                    nn.Conv3d(dim, dim,(7,1,1), padding=(3,0,0), groups=1)
+                    nn.Conv3d(dim, dim,(1,1,11), padding=(0,0,5), groups=1),
+                    nn.Conv3d(dim, dim,(1,11,1), padding=(0,5,0), groups=1),
+                    nn.Conv3d(dim, dim,(11,1,1), padding=(5,0,0), groups=1)
             )
         elif dim==384:
             self.a = nn.Sequential(
                     nn.Conv3d(dim, dim, 1),
                     nn.GELU(),
-                    nn.Conv3d(dim, dim,(1,1,5), padding=(0,0,2), groups=1),
-                    nn.Conv3d(dim, dim,(1,5,1), padding=(0,2,0), groups=1),
-                    nn.Conv3d(dim, dim,(5,1,1), padding=(2,0,0), groups=1)
+                    nn.Conv3d(dim, dim,(1,1,9), padding=(0,0,4), groups=1),
+                    nn.Conv3d(dim, dim,(1,9,1), padding=(0,4,0), groups=1),
+                    nn.Conv3d(dim, dim,(9,1,1), padding=(4,0,0), groups=1)
             )    
         elif dim==768:
             self.a = nn.Sequential(
                     nn.Conv3d(dim, dim, 1),
                     nn.GELU(),
-                    nn.Conv3d(dim, dim,(1,1,5), padding=(0,0,2), groups=1),
-                    nn.Conv3d(dim, dim,(1,5,1), padding=(0,2,0),groups=1),
-                    nn.Conv3d(dim, dim,(5,1,1), padding=(2,0,0), groups=1)
+                    nn.Conv3d(dim, dim,(1,1,7), padding=(0,0,3), groups=1),
+                    nn.Conv3d(dim, dim,(1,7,1), padding=(0,3,0),groups=1),
+                    nn.Conv3d(dim, dim,(7,1,1), padding=(3,0,0), groups=1)
             )       
         else:
             self.a = nn.Sequential(
