@@ -1,197 +1,28 @@
-from re import X
-from einops import rearrange
-from copy import deepcopy
-from nnformer.utilities.nd_softmax import softmax_helper
-from torch import nn
-import torch
-import numpy as np
-from nnformer.network_architecture.initialization import InitWeights_He
-from nnformer.network_architecture.neural_network import SegmentationNetwork
-# import torch.nn.functional
-# import torch
-# import torch.nn as nn
-# import torch.nn.functional as F
-from functools import partial
+from typing import Tuple
 
-from timm.models.layers import DropPath, to_2tuple, trunc_normal_
-from timm.models.registry import register_model
-from timm.models.vision_transformer import _cfg
-from functools import partial
+import torch.nn as nn
 
-from timm.models.layers import DropPath, to_2tuple, trunc_normal_
-from timm.models.registry import register_model
-from timm.models.vision_transformer import _cfg
-import math
-
-
+from monai.networks.blocks.dynunet_block import UnetOutBlock
+from monai.networks.blocks.unetr_block import UnetrBasicBlock, UnetrUpBlock
+from typing import Union
 import torch.nn.functional as F
-import torch.utils.checkpoint as checkpoint
-from timm.models.layers import DropPath, to_3tuple, trunc_normal_
+from nnformer.network_architecture.logger import Logger as Log
+from nnformer.network_architecture.module_helper import ModuleHelper
+#from networks.UXNet_3D.uxnet_encoder import uxnet_conv
 
-class ContiguousGrad(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x):
-        return x
-    @staticmethod
-    def backward(ctx, grad_out):
-        return grad_out.contiguous()
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from timm.models.layers import trunc_normal_, DropPath
+from functools import partial
 
-class MLP(nn.Module):
-    def __init__(self, dim, mlp_ratio=4):
-        super().__init__()
+from nnformer.network_architecture.neural_network import SegmentationNetwork
 
-        self.norm = LayerNorm(dim, eps=1e-6, data_format="channels_first")
-        mlp_ratio=int(mlp_ratio)
-        self.fc1 = nn.Conv3d(dim, dim * mlp_ratio, 1)
-        #self.pos = nn.Conv3d(dim * mlp_ratio, dim * mlp_ratio, 3, padding=1, groups=dim * mlp_ratio)
-        self.fc2 = nn.Conv3d(dim * mlp_ratio, dim, 1)
-        self.act = nn.GELU()
-
-    def forward(self, x):
-        B,L,C=x.shape
-        H=W =S= int(round((L)**(1/3)))
-        x=x.view(B,C,H,W,S)
-        B, C, H, W ,S= x.shape
-
-
-        x = self.norm(x)
-        x = self.fc1(x)
-        x = self.act(x)
-        #x = x + self.pos(x)
-        x = self.fc2(x)
-        x=x.view(B,L,C)
-
-        return x
-
-
-class ConvMod(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-
-        self.norm = LayerNorm(dim, eps=1e-6, data_format="channels_first")
-        # if dim==192 or dim==384:
-        #     self.a = nn.Sequential(
-        #             nn.Conv3d(dim, dim, 1),
-        #             nn.GELU(),
-        #             nn.Conv3d(dim, dim,5, padding=2, groups=dim)
-        #     )
-        # else:
-        #     self.a = nn.Sequential(
-        #             nn.Conv3d(dim, dim, 1),
-        #             nn.GELU(),
-        #             nn.Conv3d(dim, dim, 3, padding=1, groups=dim)
-        #     )    
-        if dim==192:
-            self.a = nn.Sequential(
-                    nn.Conv3d(dim, dim, 1),
-                    nn.GELU(),
-                    nn.Conv3d(dim, dim,(1,1,7), padding=(0,0,3), groups=1),
-                    nn.Conv3d(dim, dim,(1,7,1), padding=(0,3,0), groups=1),
-                    nn.Conv3d(dim, dim,(7,1,1), padding=(3,0,0), groups=1)
-            )
-        elif dim==384:
-            self.a = nn.Sequential(
-                    nn.Conv3d(dim, dim, 1),
-                    nn.GELU(),
-                    nn.Conv3d(dim, dim,(1,1,5), padding=(0,0,2), groups=1),
-                    nn.Conv3d(dim, dim,(1,5,1), padding=(0,2,0), groups=1),
-                    nn.Conv3d(dim, dim,(5,1,1), padding=(2,0,0), groups=1)
-            )    
-        elif dim==768:
-            self.a = nn.Sequential(
-                    nn.Conv3d(dim, dim, 1),
-                    nn.GELU(),
-                    nn.Conv3d(dim, dim,(1,1,5), padding=(0,0,2), groups=1),
-                    nn.Conv3d(dim, dim,(1,5,1), padding=(0,2,0),groups=1),
-                    nn.Conv3d(dim, dim,(5,1,1), padding=(2,0,0), groups=1)
-            )       
-        else:
-            self.a = nn.Sequential(
-                    nn.Conv3d(dim, dim, 1),
-                    nn.GELU(),
-                    nn.Conv3d(dim, dim,(1,1,3), padding=(0,0,1), groups=1),
-                    nn.Conv3d(dim, dim,(1,3,1), padding=(0,1,0), groups=1),
-                    nn.Conv3d(dim, dim,(3,1,1), padding=(1,0,0), groups=1)
-            )    
-
-        self.v = nn.Conv3d(dim, dim, 1)
-        self.proj = nn.Conv3d(dim, dim, 1)
-
-    def forward(self, x):
-        B, C, H, W ,S= x.shape
-
-        x = self.norm(x)   
-        a = self.a(x)
-        x = a * self.v(x)
-        x = self.proj(x)
-
-        return x
-
-class Block(nn.Module):
-    def __init__(self, dim, mlp_ratio=4., drop_path=0.):
-        super().__init__()
-
-        self.attn = ConvMod(dim)
-        self.mlp=MLP(dim, mlp_ratio)
-        layer_scale_init_value = 1e-6           
-        self.layer_scale_1 = nn.Parameter(
-            layer_scale_init_value * torch.ones((dim)), requires_grad=True)
-        self.layer_scale_2 = nn.Parameter(
-            layer_scale_init_value * torch.ones((dim)), requires_grad=True)
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-
-    def forward(self, x):
-        B,L,C=x.shape
-        H=W =S= int(round((L)**(1/3)))
-        x=x.view(B,C,H,W,S)
-        x = x + self.drop_path(self.layer_scale_1.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * self.attn(x))
-        q=x
-        x=x.view(B,L,C)
-        x=self.mlp(x)
-        x=x.view(B,C,H,W,S)
-        x = self.drop_path(self.layer_scale_2.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)*x)
-        x=q+x
-        x=x.view(B,L,C)
-        return x
-
-
-
-
-
-              
-
-                    
-
-
-# class Block(nn.Module):
-#     def __init__(self, dim, mlp_ratio=4., drop_path=0.):
-#         super().__init__()
-        
-#         self.attn = ConvMod(dim)
-#         self.mlp=Mlp(in_features=dim, hidden_features=dim, act_layer=nn.GELU, drop=0)
-#         layer_scale_init_value = 1e-6           
-#         self.layer_scale_1 = nn.Parameter(
-#             layer_scale_init_value * torch.ones((dim)), requires_grad=True)
-#         self.layer_scale_2 = nn.Parameter(
-#             layer_scale_init_value * torch.ones((dim)), requires_grad=True)
-#         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-
-#     def forward(self, x):
-#         B,L,C=x.shape
-#         H=W =S= int(round((L)**(1/3)))
-#         x=x.view(B,C,H,W,S)
-        # x = x + self.drop_path(self.layer_scale_1.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1) * self.attn(x))
-        # q=x
-        # x=x.view(B,L,C)
-        # x=self.mlp(x)
-        # x=x.view(B,C,H,W,S)
-        # x = self.drop_path(self.layer_scale_2.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)*x)
-        # x=q+x
-        # x=x.view(B,L,C)
-        # return x
-      
 class LayerNorm(nn.Module):
-    r""" From ConvNeXt (https://arxiv.org/pdf/2201.03545.pdf)
+    r""" LayerNorm that supports two data formats: channels_last (default) or channels_first.
+    The ordering of the dimensions in the inputs. channels_last corresponds to inputs with
+    shape (batch_size, height, width, channels) while channels_first corresponds to inputs
+    with shape (batch_size, channels, height, width).
     """
     def __init__(self, normalized_shape, eps=1e-6, data_format="channels_last"):
         super().__init__()
@@ -200,9 +31,9 @@ class LayerNorm(nn.Module):
         self.eps = eps
         self.data_format = data_format
         if self.data_format not in ["channels_last", "channels_first"]:
-            raise NotImplementedError 
+            raise NotImplementedError
         self.normalized_shape = (normalized_shape, )
-    
+
     def forward(self, x):
         if self.data_format == "channels_last":
             return F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
@@ -210,494 +41,404 @@ class LayerNorm(nn.Module):
             u = x.mean(1, keepdim=True)
             s = (x - u).pow(2).mean(1, keepdim=True)
             x = (x - u) / torch.sqrt(s + self.eps)
-            x = self.weight[:, None, None,None] * x + self.bias[:, None, None,None]
-            return x            
+            # print(self.weight.size())
+            x = self.weight[:, None, None, None] * x + self.bias[:, None, None, None]
 
+            return x
 
-        
-            
-        
+class ux_block(nn.Module):
+    r""" ConvNeXt Block. There are two equivalent implementations:
+    (1) DwConv -> LayerNorm (channels_first) -> 1x1 Conv -> GELU -> 1x1 Conv; all in (N, C, H, W)
+    (2) DwConv -> Permute to (N, H, W, C); LayerNorm (channels_last) -> Linear -> GELU -> Linear; Permute back
+    We use (2) as we find it slightly faster in PyTorch
+    Args:
+        dim (int): Number of input channels.
+        drop_path (float): Stochastic depth rate. Default: 0.0
+        layer_scale_init_value (float): Init value for Layer Scale. Default: 1e-6.
+    """
 
-
-class PatchMerging(nn.Module):
-  
-
-    def __init__(self, dim, norm_layer=nn.LayerNorm):
+    def __init__(self, dim, drop_path=0., layer_scale_init_value=1e-6):
         super().__init__()
-        self.dim = dim
-        self.reduction = nn.Conv3d(dim,dim*2,kernel_size=3,stride=2,padding=1)
-       
-        self.norm = norm_layer(dim)
-
-    def forward(self, x, S, H, W):
-
-        B, L, C = x.shape
-        assert L == H * W * S, "input feature has wrong size"
-        x = x.view(B, S, H, W, C)
-        
-        x = F.gelu(x)
-        x = self.norm(x)
-        x=x.permute(0,4,1,2,3).contiguous()
-        x=self.reduction(x)
-        x=x.permute(0,2,3,4,1).contiguous().view(B,-1,2*C)
-      
-        return x
-class Patch_Expanding(nn.Module):
-    def __init__(self, dim, norm_layer=nn.LayerNorm):
-        super().__init__()
-        self.dim = dim
-       
-        self.norm = norm_layer(dim)
-        self.up=nn.ConvTranspose3d(dim,dim//2,2,2)
-    def forward(self, x, S, H, W):
-      
-        
-        B, L, C = x.shape
-        assert L == H * W * S, "input feature has wrong size"
-
-        x = x.view(B, S, H, W, C)
-
-       
-        
-        x = self.norm(x)
-        x=x.permute(0,4,1,2,3).contiguous()
-        x = self.up(x)
-        x = ContiguousGrad.apply(x)
-        x=x.permute(0,2,3,4,1).contiguous().view(B,-1,C//2)
-       
-        return x
-class BasicLayer(nn.Module):
-   
-    def __init__(self,
-                 dim,
-                 input_resolution,
-                 depth,
-                 num_heads,
-                 window_size=7,
-                 mlp_ratio=4.,
-                 qkv_bias=True,
-                 qk_scale=None,
-                 drop=0.,
-                 attn_drop=0.,
-                 drop_path=0.,
-                 norm_layer=nn.LayerNorm,
-                 downsample=True
-                 ):
-        super().__init__()
-        self.window_size = window_size
-        self.shift_size = window_size // 2
-        self.depth = depth
-        # build blocks
-        
-        self.blocks = nn.ModuleList([
-            Block(
-                dim=dim,
-                mlp_ratio=mlp_ratio,
-                drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path)
-            for i in range(depth)])
-
-        # patch merging layer
-        if downsample is not None:
-            self.downsample = downsample(dim=dim, norm_layer=norm_layer)
-        else:
-            self.downsample = None
-
-    def forward(self, x, S, H, W):
-      
-
-        
-        
-        for blk in self.blocks:
-          
-            x = blk(x)
-        if self.downsample is not None:
-            x_down = self.downsample(x, S, H, W)
-            Ws, Wh, Ww = (S + 1) // 2, (H + 1) // 2, (W + 1) // 2
-            return x, S, H, W, x_down, Ws, Wh, Ww
-        else:
-            return x, S, H, W, x, S, H, W
-
-class BasicLayer_up(nn.Module):
-
-    def __init__(self,
-                 dim,
-                 input_resolution,
-                 depth,
-                 num_heads,
-                 window_size=7,
-                 mlp_ratio=4.,
-                 qkv_bias=True,
-                 qk_scale=None,
-                 drop=0.,
-                 attn_drop=0.,
-                 drop_path=0.,
-                 norm_layer=nn.LayerNorm,
-                 upsample=True
-                ):
-        super().__init__()
-        self.window_size = window_size
-        self.shift_size = window_size // 2
-        self.depth = depth
-        
-
-        # build blocks
-        self.blocks = nn.ModuleList()
-        self.blocks.append(
-            Block(
-                dim=dim,
-                mlp_ratio=mlp_ratio,
-                drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path))
-        for i in range(depth-1):
-            self.blocks.append(
-                Block(
-                dim=dim,
-                mlp_ratio=mlp_ratio,
-                drop_path=drop_path[1] if isinstance(drop_path, list) else drop_path))
-        
-
-        
-        self.Upsample = upsample(dim=2*dim, norm_layer=norm_layer)
-    def forward(self, x,skip, S, H, W):
-        
-      
-        x_up = self.Upsample(x, S, H, W)
-       
-        x = x_up + skip
-        S, H, W = S * 2, H * 2, W * 2
-    
-        
-        x = self.blocks[0](x)
-        for i in range(self.depth-1):
-            x = self.blocks[i+1](x)
-        
-        return x, S, H, W
-        
-class project(nn.Module):
-    def __init__(self,in_dim,out_dim,stride,padding,activate,norm,last=False):
-        super().__init__()
-        self.out_dim=out_dim
-        self.conv1=nn.Conv3d(in_dim,out_dim,kernel_size=3,stride=stride,padding=padding)
-        self.conv2=nn.Conv3d(out_dim,out_dim,kernel_size=3,stride=1,padding=1)
-        self.activate=activate()
-        self.norm1=norm(out_dim)
-        self.last=last  
-        if not last:
-            self.norm2=norm(out_dim)
-            
-    def forward(self,x):
-        x=self.conv1(x)
-        x=self.activate(x)
-        #norm1
-        Ws, Wh, Ww = x.size(2), x.size(3), x.size(4)
-        x = x.flatten(2).transpose(1, 2).contiguous()
-        x = self.norm1(x)
-        x = x.transpose(1, 2).contiguous().view(-1, self.out_dim, Ws, Wh, Ww)
-        
-
-        x=self.conv2(x)
-        if not self.last:
-            x=self.activate(x)
-            #norm2
-            Ws, Wh, Ww = x.size(2), x.size(3), x.size(4)
-            x = x.flatten(2).transpose(1, 2).contiguous()
-            x = self.norm2(x)
-            x = x.transpose(1, 2).contiguous().view(-1, self.out_dim, Ws, Wh, Ww)
-        return x
-        
-    
-
-class PatchEmbed(nn.Module):
-
-    def __init__(self, patch_size=4, in_chans=4, embed_dim=96, norm_layer=None):
-        super().__init__()
-        patch_size = to_3tuple(patch_size)
-        self.patch_size = patch_size
-
-        self.in_chans = in_chans
-        self.embed_dim = embed_dim
-        stride1=[patch_size[0],patch_size[1]//2,patch_size[2]//2]
-        stride2=[patch_size[0]//2,patch_size[1]//2,patch_size[2]//2]
-        #stride2=[1,1,1]
-        self.proj1 = project(in_chans,embed_dim//2,stride1,1,nn.GELU,nn.LayerNorm,False)
-        self.proj2 = project(embed_dim//2,embed_dim,stride2,1,nn.GELU,nn.LayerNorm,True)
-        if norm_layer is not None:
-            self.norm = norm_layer(embed_dim)
-        else:
-            self.norm = None
+        self.dwconv = nn.Conv3d(dim, dim, kernel_size=7, padding=3, groups=dim)
+        self.norm = LayerNorm(dim, eps=1e-6)
+        # self.pwconv1 = nn.Linear(dim, 4 * dim)
+        self.pwconv1 = nn.Conv3d(dim, 4 * dim, kernel_size=1, groups=dim)
+        self.act = nn.GELU()
+        # self.pwconv2 = nn.Linear(4 * dim, dim)
+        self.pwconv2 = nn.Conv3d(4 * dim, dim, kernel_size=1, groups=dim)
+        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((dim)),
+                                  requires_grad=True) if layer_scale_init_value > 0 else None
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
     def forward(self, x):
-        """Forward function."""
-        # padding
-        _, _, S, H, W = x.size()
-        if W % self.patch_size[2] != 0:
-            x = F.pad(x, (0, self.patch_size[2] - W % self.patch_size[2]))
-        if H % self.patch_size[1] != 0:
-            x = F.pad(x, (0, 0, 0, self.patch_size[1] - H % self.patch_size[1]))
-        if S % self.patch_size[0] != 0:
-            x = F.pad(x, (0, 0, 0, 0, 0, self.patch_size[0] - S % self.patch_size[0]))
-        x = self.proj1(x)  # B C Ws Wh Ww
-        x = self.proj2(x)  # B C Ws Wh Ww
-        if self.norm is not None:
-            Ws, Wh, Ww = x.size(2), x.size(3), x.size(4)
-            x = x.flatten(2).transpose(1, 2).contiguous()
-            x = self.norm(x)
-            x = x.transpose(1, 2).contiguous().view(-1, self.embed_dim, Ws, Wh, Ww)
+        input = x
+        x = self.dwconv(x)
+        x = x.permute(0, 2, 3, 4, 1) # (N, C, H, W, D) -> (N, H, W, D, C)
+        x = self.norm(x)
+        x = x .permute(0, 4, 1, 2, 3)
+        x = self.pwconv1(x)
+        x = self.act(x)
+        x = self.pwconv2(x)
+        x = x.permute(0, 2, 3, 4, 1)
+        if self.gamma is not None:
+            x = self.gamma * x
 
+        x = x.permute(0, 4, 1, 2, 3)
+        x = input + self.drop_path(x)
         return x
 
 
-
-class Encoder(nn.Module):
-   
-    def __init__(self,
-                 pretrain_img_size=224,
-                 patch_size=4,
-                 in_chans=1  ,
-                 embed_dim=96,
-                 depths=[2, 2, 2, 2],
-                 num_heads=[4, 8, 16, 32],
-                 window_size=7,
-                 mlp_ratio=4.,
-                 qkv_bias=True,
-                 qk_scale=None,
-                 drop_rate=0.,
-                 attn_drop_rate=0.,
-                 drop_path_rate=0.2,
-                 norm_layer=nn.LayerNorm,
-                 patch_norm=True,
-                 out_indices=(0, 1, 2, 3)
-                 ):
+class uxnet_conv(nn.Module):
+    """
+    Args:
+        in_chans (int): Number of input image channels. Default: 3
+        num_classes (int): Number of classes for classification head. Default: 1000
+        depths (tuple(int)): Number of blocks at each stage. Default: [3, 3, 9, 3]
+        dims (int): Feature dimension at each stage. Default: [96, 192, 384, 768]
+        drop_path_rate (float): Stochastic depth rate. Default: 0.
+        layer_scale_init_value (float): Init value for Layer Scale. Default: 1e-6.
+        head_init_scale (float): Init scaling value for classifier weights and biases. Default: 1.
+    """
+    def __init__(self, in_chans=1, depths=[2, 2, 2, 2], dims=[48, 96, 192, 384],
+                 drop_path_rate=0., layer_scale_init_value=1e-6, out_indices=[0, 1, 2, 3]):
         super().__init__()
 
-        self.pretrain_img_size = pretrain_img_size
+        self.downsample_layers = nn.ModuleList() # stem and 3 intermediate downsampling conv layers
+        # stem = nn.Sequential(
+        #     nn.Conv3d(in_chans, dims[0], kernel_size=7, stride=2, padding=3),
+        #     LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
+        # )
+        stem = nn.Sequential(
+              nn.Conv3d(in_chans, dims[0], kernel_size=7, stride=2, padding=3),
+              LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
+              )
+        self.downsample_layers.append(stem)
+        for i in range(3):
+            downsample_layer = nn.Sequential(
+                LayerNorm(dims[i], eps=1e-6, data_format="channels_first"),
+                nn.Conv3d(dims[i], dims[i+1], kernel_size=2, stride=2),
+            )
+            self.downsample_layers.append(downsample_layer)
 
-        self.num_layers = len(depths)
-        self.embed_dim = embed_dim
-        self.patch_norm = patch_norm
+        self.stages = nn.ModuleList()
+        dp_rates = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]
+        cur = 0
+        for i in range(4):
+            stage = nn.Sequential(
+                *[ux_block(dim=dims[i], drop_path=dp_rates[cur + j],
+                        layer_scale_init_value=layer_scale_init_value) for j in range(depths[i])]
+            )
+            self.stages.append(stage)
+            cur += depths[i]
+
         self.out_indices = out_indices
 
-        # split image into non-overlapping patches
-        self.patch_embed = PatchEmbed(
-            patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
-            norm_layer=norm_layer if self.patch_norm else None)
-
-       
-
-        self.pos_drop = nn.Dropout(p=drop_rate)
-
-        # stochastic depth
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
-   
-        # build layers
-        self.layers = nn.ModuleList()
-        for i_layer in range(self.num_layers):
-            layer = BasicLayer(
-                dim=int(embed_dim * 2 ** i_layer),
-                input_resolution=(
-                    pretrain_img_size[0] // patch_size[0] // 2 ** i_layer, pretrain_img_size[1] // patch_size[1] // 2 ** i_layer,
-                    pretrain_img_size[2] // patch_size[2] // 2 ** i_layer),
-                depth=depths[i_layer],
-                num_heads=num_heads[i_layer],
-                window_size=window_size[i_layer],
-                mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                qk_scale=qk_scale,
-                drop=drop_rate,
-                attn_drop=attn_drop_rate,
-                drop_path=dpr[sum(
-                    depths[:i_layer]):sum(depths[:i_layer + 1])],
-                norm_layer=norm_layer,
-                downsample=PatchMerging
-                if (i_layer < self.num_layers - 1) else None
-                )
-            self.layers.append(layer)
-
-        num_features = [int(embed_dim * 2 ** i) for i in range(self.num_layers)]
-        self.num_features = num_features
-
-        # add a norm layer for each output
-        for i_layer in out_indices:
-            layer = norm_layer(num_features[i_layer])
+        norm_layer = partial(LayerNorm, eps=1e-6, data_format="channels_first")
+        for i_layer in range(4):
+            layer = norm_layer(dims[i_layer])
             layer_name = f'norm{i_layer}'
             self.add_module(layer_name, layer)
 
+        # self.apply(self._init_weights)
 
-    def forward(self, x):
-        """Forward function."""
-        
-        x = self.patch_embed(x)
-        down=[]
-       
-        Ws, Wh, Ww = x.size(2), x.size(3), x.size(4)
-        
-        x = x.flatten(2).transpose(1, 2).contiguous()
-        x = self.pos_drop(x)
-        
-      
-        for i in range(self.num_layers):
-            layer = self.layers[i]
-            x_out, S, H, W, x, Ws, Wh, Ww = layer(x, Ws, Wh, Ww)
+    def forward_features(self, x):
+        outs = []
+        for i in range(4):
+            # print(i)
+            # print(x.size())
+            x = self.downsample_layers[i](x)
+            # print(x.size())
+            x = self.stages[i](x)
+            # print(x.size())
             if i in self.out_indices:
                 norm_layer = getattr(self, f'norm{i}')
-                x_out = norm_layer(x_out)
+                x_out = norm_layer(x)
+                outs.append(x_out)
 
-                out = x_out.view(-1, S, H, W, self.num_features[i]).permute(0, 4, 1, 2, 3).contiguous()
-              
-                down.append(out)
-        return down
-
-   
-
-class Decoder(nn.Module):
-    def __init__(self,
-                 pretrain_img_size,
-                 embed_dim,
-                 patch_size=4,
-                 depths=[2,2,2],
-                 num_heads=[24,12,6],
-                 window_size=4,
-                 mlp_ratio=4.,
-                 qkv_bias=True,
-                 qk_scale=None,
-                 drop_rate=0.,
-                 attn_drop_rate=0.,
-                 drop_path_rate=0.2,
-                 norm_layer=nn.LayerNorm
-                 ):
-        super().__init__()
-        
-
-        self.num_layers = len(depths)
-        self.pos_drop = nn.Dropout(p=drop_rate)
-
-        # stochastic depth
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
-
-        # build layers
-        self.layers = nn.ModuleList()
-        for i_layer in range(self.num_layers)[::-1]:
-            
-            layer = BasicLayer_up(
-                dim=int(embed_dim * 2 ** (len(depths)-i_layer-1)),
-                input_resolution=(
-                    pretrain_img_size[0] // patch_size[0] // 2 ** (len(depths)-i_layer-1), pretrain_img_size[1] // patch_size[1] // 2 ** (len(depths)-i_layer-1),
-                    pretrain_img_size[2] // patch_size[2] // 2 ** (len(depths)-i_layer-1)),
-                depth=depths[i_layer],
-                num_heads=num_heads[i_layer],
-                window_size=window_size[i_layer],
-                mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                qk_scale=qk_scale,
-                drop=drop_rate,
-                attn_drop=attn_drop_rate,
-                drop_path=dpr[sum(
-                    depths[:i_layer]):sum(depths[:i_layer + 1])],
-                norm_layer=norm_layer,
-                upsample=Patch_Expanding
-                )
-            self.layers.append(layer)
-        self.num_features = [int(embed_dim * 2 ** i) for i in range(self.num_layers)]
-    def forward(self,x,skips):
-            
-        outs=[]
-        S, H, W = x.size(2), x.size(3), x.size(4)
-        x = x.flatten(2).transpose(1, 2).contiguous()
-        for index,i in enumerate(skips):
-             i = i.flatten(2).transpose(1, 2).contiguous()
-             skips[index]=i
-        x = self.pos_drop(x)
-            
-        for i in range(self.num_layers)[::-1]:
-            
-            layer = self.layers[i]
-            
-            x, S, H, W,  = layer(x,skips[i], S, H, W)
-            out = x.view(-1, S, H, W, self.num_features[i])
-            outs.append(out)
-        return outs
-
-      
-class final_patch_expanding(nn.Module):
-    def __init__(self,dim,num_class,patch_size):
-        super().__init__()
-        self.up=nn.ConvTranspose3d(dim,num_class,patch_size,patch_size)
-      
-    def forward(self,x):
-        x=x.permute(0,4,1,2,3).contiguous()
-        x=self.up(x)
-      
-        
-        return x    
-
-
-
-
-                                         
-class nnFormer(SegmentationNetwork):
-
-    def __init__(self, crop_size=[64,128,128],
-                embedding_dim=192,
-                input_channels=1, 
-                num_classes=14, 
-                conv_op=nn.Conv3d, 
-                depths=[2,2,2,2],
-                num_heads=[6, 12, 24, 48],
-                patch_size=[2,4,4],
-                window_size=[4,4,8,4],
-                deep_supervision=True):
-      
-        super(nnFormer, self).__init__()
-        
-        
-        self._deep_supervision = deep_supervision
-        self.do_ds = deep_supervision
-        self.num_classes=num_classes
-        self.conv_op=conv_op
-       
-        
-        self.upscale_logits_ops = []
-     
-        
-        self.upscale_logits_ops.append(lambda x: x)
-        
-        embed_dim=embedding_dim
-        depths=depths
-        num_heads=num_heads
-        patch_size=patch_size
-        window_size=window_size
-        self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
-        self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
-        
-        self.final=[]
-        if self.do_ds:
-            
-            for i in range(len(depths)-1):
-                self.final.append(final_patch_expanding(embed_dim*2**i,num_classes,patch_size=patch_size))
-
-        else:
-            self.final.append(final_patch_expanding(embed_dim,num_classes,patch_size=patch_size))
-    
-        self.final=nn.ModuleList(self.final)
-    
+        return tuple(outs)
 
     def forward(self, x):
-      
-            
-        seg_outputs=[]
-        skips = self.model_down(x)
-        neck=skips[-1]
-       
-        out=self.decoder(neck,skips)
+        x = self.forward_features(x)
+        return x
+
+class ProjectionHead(nn.Module):
+    def __init__(self, dim_in, proj_dim=256, proj='convmlp', bn_type='torchbn'):
+        super(ProjectionHead, self).__init__()
+
+        Log.info('proj_dim: {}'.format(proj_dim))
+
+        if proj == 'linear':
+            self.proj = nn.Conv2d(dim_in, proj_dim, kernel_size=1)
+        elif proj == 'convmlp':
+            self.proj = nn.Sequential(
+                nn.Conv3d(dim_in, dim_in, kernel_size=1),
+                ModuleHelper.BNReLU(dim_in, bn_type=bn_type),
+                nn.Conv3d(dim_in, proj_dim, kernel_size=1)
+            )
+
+    def forward(self, x):
+        return F.normalize(self.proj(x), p=2, dim=1)
+
+
+# class ResBlock(nn.Module):
+#     expansion = 1
+#
+#     def __init__(self,
+#                  in_planes: int,
+#                  planes: int,
+#                  spatial_dims: int = 3,
+#                  stride: int = 1,
+#                  downsample: Union[nn.Module, partial, None] = None,
+#     ) -> None:
+#         """
+#         Args:
+#             in_planes: number of input channels.
+#             planes: number of output channels.
+#             spatial_dims: number of spatial dimensions of the input image.
+#             stride: stride to use for first conv layer.
+#             downsample: which downsample layer to use.
+#         """
+#
+#         super().__init__()
+#
+#         conv_type: Callable = Conv[Conv.CONV, spatial_dims]
+#         norm_type: Callable = Norm[Norm.BATCH, spatial_dims]
+#
+#         self.conv1 = conv_type(in_planes, planes, kernel_size=3, padding=1, stride=stride, bias=False)
+#         self.bn1 = norm_type(planes)
+#         self.relu = nn.ReLU(inplace=True)
+#         self.conv2 = conv_type(planes, planes, kernel_size=3, padding=1, bias=False)
+#         self.bn2 = norm_type(planes)
+#         self.downsample = downsample
+#         self.stride = stride
+#
+#     def forward(self, x:torch.Tensor) -> torch.Tensor:
+#         residual = x
+#
+#         out: torch.Tensor = self.conv1(x)
+#         out = self.bn1(out)
+#         out = self.relu(out)
+#
+#         out = self.conv2(out)
+#         out = self.bn2(out)
+#
+#         if self.downsample is not None:
+#             residual = self.downsample(x)
+#
+#         out += residual
+#         out = self.relu(out)
+#
+#         return out
+
+
+class UXNET(SegmentationNetwork):
+
+    def __init__(
+        self,
+        in_chans=1,
+        out_chans=13,
+        depths=[2, 2, 2, 2],
+        feat_size=[48, 96, 192, 384],
+        drop_path_rate=0,
+        layer_scale_init_value=1e-6,
+        hidden_size: int = 768,
+        norm_name: Union[Tuple, str] = "instance",
+        conv_block: bool = True,
+        res_block: bool = True,
+        spatial_dims=3,
+    ) -> None:
+        """
+        Args:
+            in_channels: dimension of input channels.
+            out_channels: dimension of output channels.
+            img_size: dimension of input image.
+            feature_size: dimension of network feature size.
+            hidden_size: dimension of hidden layer.
+            mlp_dim: dimension of feedforward layer.
+            num_heads: number of attention heads.
+            pos_embed: position embedding layer type.
+            norm_name: feature normalization type and arguments.
+            conv_block: bool argument to determine if convolutional block is used.
+            res_block: bool argument to determine if residual block is used.
+            dropout_rate: faction of the input units to drop.
+            spatial_dims: number of spatial dims.
+        """
+
+        super().__init__()
+
+        # in_channels: int,
+        # out_channels: int,
+        # img_size: Union[Sequence[int], int],
+        # feature_size: int = 16,
+        # if not (0 <= dropout_rate <= 1):
+        #     raise ValueError("dropout_rate should be between 0 and 1.")
+        #
+        # if hidden_size % num_heads != 0:
+        #     raise ValueError("hidden_size should be divisible by num_heads.")
+        self.hidden_size = hidden_size
+        # self.feature_size = feature_size
+        self.in_chans = in_chans
+        self.out_chans = out_chans
+        self.depths = depths
+        self.drop_path_rate = drop_path_rate
+        self.feat_size = feat_size
+        self.layer_scale_init_value = layer_scale_init_value
+        self.out_indice = []
+        for i in range(len(self.feat_size)):
+            self.out_indice.append(i)
+
+        self.spatial_dims = spatial_dims
+
+        # self.classification = False
+        # self.vit = ViT(
+        #     in_channels=in_channels,
+        #     img_size=img_size,
+        #     patch_size=self.patch_size,
+        #     hidden_size=hidden_size,
+        #     mlp_dim=mlp_dim,
+        #     num_layers=self.num_layers,
+        #     num_heads=num_heads,
+        #     pos_embed=pos_embed,
+        #     classification=self.classification,
+        #     dropout_rate=dropout_rate,
+        #     spatial_dims=spatial_dims,
+        # )
+        self.uxnet_3d = uxnet_conv(
+            in_chans= self.in_chans,
+            depths=self.depths,
+            dims=self.feat_size,
+            drop_path_rate=self.drop_path_rate,
+            layer_scale_init_value=1e-6,
+            out_indices=self.out_indice
+        )
+        self.encoder1 = UnetrBasicBlock(
+            spatial_dims=spatial_dims,
+            in_channels=self.in_chans,
+            out_channels=self.feat_size[0],
+            kernel_size=3,
+            stride=1,
+            norm_name=norm_name,
+            res_block=res_block,
+        )
+        self.encoder2 = UnetrBasicBlock(
+            spatial_dims=spatial_dims,
+            in_channels=self.feat_size[0],
+            out_channels=self.feat_size[1],
+            kernel_size=3,
+            stride=1,
+            norm_name=norm_name,
+            res_block=res_block,
+        )
+        self.encoder3 = UnetrBasicBlock(
+            spatial_dims=spatial_dims,
+            in_channels=self.feat_size[1],
+            out_channels=self.feat_size[2],
+            kernel_size=3,
+            stride=1,
+            norm_name=norm_name,
+            res_block=res_block,
+        )
+        self.encoder4 = UnetrBasicBlock(
+            spatial_dims=spatial_dims,
+            in_channels=self.feat_size[2],
+            out_channels=self.feat_size[3],
+            kernel_size=3,
+            stride=1,
+            norm_name=norm_name,
+            res_block=res_block,
+        )
+
+        self.encoder5 = UnetrBasicBlock(
+            spatial_dims=spatial_dims,
+            in_channels=self.feat_size[3],
+            out_channels=self.hidden_size,
+            kernel_size=3,
+            stride=1,
+            norm_name=norm_name,
+            res_block=res_block,
+        )
+
+        self.decoder5 = UnetrUpBlock(
+            spatial_dims=spatial_dims,
+            in_channels=self.hidden_size,
+            out_channels=self.feat_size[3],
+            kernel_size=3,
+            upsample_kernel_size=2,
+            norm_name=norm_name,
+            res_block=res_block,
+        )
+        self.decoder4 = UnetrUpBlock(
+            spatial_dims=spatial_dims,
+            in_channels=self.feat_size[3],
+            out_channels=self.feat_size[2],
+            kernel_size=3,
+            upsample_kernel_size=2,
+            norm_name=norm_name,
+            res_block=res_block,
+        )
+        self.decoder3 = UnetrUpBlock(
+            spatial_dims=spatial_dims,
+            in_channels=self.feat_size[2],
+            out_channels=self.feat_size[1],
+            kernel_size=3,
+            upsample_kernel_size=2,
+            norm_name=norm_name,
+            res_block=res_block,
+        )
+        self.decoder2 = UnetrUpBlock(
+            spatial_dims=spatial_dims,
+            in_channels=self.feat_size[1],
+            out_channels=self.feat_size[0],
+            kernel_size=3,
+            upsample_kernel_size=2,
+            norm_name=norm_name,
+            res_block=res_block,
+        )
+        self.decoder1 = UnetrBasicBlock(
+            spatial_dims=spatial_dims,
+            in_channels=self.feat_size[0],
+            out_channels=self.feat_size[0],
+            kernel_size=3,
+            stride=1,
+            norm_name=norm_name,
+            res_block=res_block,
+        )
+        self.out = UnetOutBlock(spatial_dims=spatial_dims, in_channels=48, out_channels=self.out_chans)
+        # self.conv_proj = ProjectionHead(dim_in=hidden_size)
+
+
+    def proj_feat(self, x, hidden_size, feat_size):
+        new_view = (x.size(0), *feat_size, hidden_size)
+        x = x.view(new_view)
+        new_axes = (0, len(x.shape) - 1) + tuple(d + 1 for d in range(len(feat_size)))
+        x = x.permute(new_axes).contiguous()
+        return x
+    
+    def forward(self, x_in):
+        outs = self.uxnet_3d(x_in)
+        # print(outs[0].size())
+        # print(outs[1].size())
+        # print(outs[2].size())
+        # print(outs[3].size())
+        enc1 = self.encoder1(x_in)
+        # print(enc1.size())
+        x2 = outs[0]
+        enc2 = self.encoder2(x2)
+        # print(enc2.size())
+        x3 = outs[1]
+        enc3 = self.encoder3(x3)
+        # print(enc3.size())
+        x4 = outs[2]
+        enc4 = self.encoder4(x4)
+        # print(enc4.size())
+        # dec4 = self.proj_feat(outs[3], self.hidden_size, self.feat_size)
+        enc_hidden = self.encoder5(outs[3])
+        dec3 = self.decoder5(enc_hidden, enc4)
+        dec2 = self.decoder4(dec3, enc3)
+        dec1 = self.decoder3(dec2, enc2)
+        dec0 = self.decoder2(dec1, enc1)
+        out = self.decoder1(dec0)
         
-       
-            
-        if self.do_ds:
-            for i in range(len(out)):  
-                seg_outputs.append(self.final[-(i+1)](out[i]))
+        # feat = self.conv_proj(dec4)
         
-          
-            return seg_outputs[::-1]
-        else:
-            seg_outputs.append(self.final[0](out[-1]))
-            return seg_outputs[-1]
-        
+        return self.out(out)

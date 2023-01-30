@@ -21,7 +21,7 @@ import torch
 from nnformer.training.data_augmentation.data_augmentation_moreDA import get_moreDA_augmentation
 from nnformer.training.loss_functions.deep_supervision import MultipleOutputLoss2
 from nnformer.utilities.to_torch import maybe_to_torch, to_cuda
-from nnformer.network_architecture.nnFormer_synapse import nnFormer
+from nnformer.network_architecture.nnFormer_synapse import UXNET
 from nnformer.network_architecture.initialization import InitWeights_He
 from nnformer.network_architecture.neural_network import SegmentationNetwork
 from nnformer.training.data_augmentation.default_data_augmentation import default_2D_augmentation_params, \
@@ -66,11 +66,11 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         self.conv_op=nn.Conv3d
         
         self.embedding_dim=192
-        self.depths=[3, 3, 12, 3]
+        self.depths=[2, 2, 2, 2]
         self.num_heads=[6, 12, 24, 48]
         self.embedding_patch_size=[2,4,4]
         self.window_size=[4,4,8,4]
-        self.deep_supervision=True
+        self.deep_supervision=False
     def initialize(self, training=True, force_load_plans=False):
         """
         - replaced get_default_augmentation with get_moreDA_augmentation
@@ -163,16 +163,15 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
   
       
         
-        self.network=nnFormer(crop_size=self.crop_size,
-                                embedding_dim=self.embedding_dim,
-                                input_channels=self.input_channels,
-                                num_classes=self.num_classes,
-                                conv_op=self.conv_op,
-                                depths=self.depths,
-                                num_heads=self.num_heads,
-                                patch_size=self.embedding_patch_size,
-                                window_size=self.window_size,
-                                deep_supervision=self.deep_supervision)
+        self.network=UXNET(
+                        in_chans=1,
+                        out_chans=self.num_classes,
+                        depths=[2, 2, 2, 2],
+                        feat_size=[48, 96, 192, 384],
+                        drop_path_rate=0,
+                        layer_scale_init_value=1e-6,
+                        spatial_dims=3,
+                    )
         #if self.load_pretrain_weight:
             #checkpoint = torch.load('/home/xychen/jsguo/weight/gelunorm_former_skip_global_shift.model', map_location='cpu')
             #self.network.load_state_dict(checkpoint)
@@ -471,7 +470,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         """
         self.maybe_update_lr(self.epoch)  # if we dont overwrite epoch then self.epoch+1 is used which is not what we
         # want at the start of the training
-        ds = self.network.do_ds
+        #ds = self.network.do_ds
         if self.deep_supervision:
             self.network.do_ds = True
         else:
