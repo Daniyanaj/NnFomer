@@ -67,7 +67,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         
         self.embedding_dim=192
         self.depths=[2, 2, 2, 2]
-        self.num_heads=[6, 12, 24, 48]
+        self.num_heads=[12, 24, 48, 48]
         self.embedding_patch_size=[2,4,4]
         self.window_size=[4,4,8,4]
         self.deep_supervision=True
@@ -339,9 +339,9 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
                 self.print_to_log_file("The split file contains %d splits." % len(splits))
 
             self.print_to_log_file("Desired fold for training: %d" % self.fold)
-            splits[self.fold]['train']=np.array(['img0006','img0007' ,'img0009', 'img0010', 'img0021' ,'img0023' ,'img0024','img0026' ,'img0027' ,'img0031', 'img0033' ,'img0034' \
-                                ,'img0039', 'img0040','img0005', 'img0028', 'img0030', 'img0037'])
-            splits[self.fold]['val']=np.array(['img0001', 'img0002', 'img0003', 'img0004', 'img0008', 'img0022','img0025', 'img0029', 'img0032', 'img0035', 'img0036', 'img0038'])
+            #splits[self.fold]['train']=np.array(['img0006','img0007' ,'img0009', 'img0010', 'img0021' ,'img0023' ,'img0024','img0026' ,'img0027' ,'img0031', 'img0033' ,'img0034' \
+            #                    ,'img0039', 'img0040','img0005', 'img0028', 'img0030', 'img0037'])
+            #splits[self.fold]['val']=np.array(['img0001', 'img0002', 'img0003', 'img0004', 'img0008', 'img0022','img0025', 'img0029', 'img0032', 'img0035', 'img0036', 'img0038'])
             if self.fold < len(splits):
                 tr_keys = splits[self.fold]['train']
                 val_keys = splits[self.fold]['val']
