@@ -328,7 +328,7 @@ class WindowAttention(nn.Module):
         return x
 
 class LePEAttention(nn.Module):
-    def __init__(self, dim, resolution, idx, split_size=7, dim_out=None, num_heads=8, attn_drop=0., proj_drop=0., qk_scale=None):
+    def __init__(self, dim, resolution, idx, split_size=7,rot=0, dim_out=None, num_heads=8, attn_drop=0., proj_drop=0., qk_scale=None):
         super().__init__()
         self.dim = dim
         self.dim_out = dim_out or dim
@@ -336,6 +336,7 @@ class LePEAttention(nn.Module):
         self.split_size = split_size
         self.num_heads = num_heads
         head_dim = dim // num_heads
+        self.rot=rot
         # NOTE scale factor was wrong in my original version, can set manually to be compat with prev weights
         self.scale = qk_scale or head_dim ** -0.5
         if idx == -1:
@@ -361,7 +362,21 @@ class LePEAttention(nn.Module):
         B, N, C = x.shape
         H = W =S= int(round((N)**(1/3)))
         x = x.transpose(-2,-1).contiguous().view(B, C, H, W,S)
-        x = img2windows(x, self.H_sp, self.W_sp,self.S_sp)
+        if self.rot>0:
+            if self.H_sp==self.resolution[0]:
+                x_rot=torch.rot90(x,1,[2,3])
+            elif self.W_sp==self.resolution[0]:
+                x_rot=torch.rot90(x,1,[3,4])    
+            elif self.S_sp==self.resolution[0]:
+                x_rot=torch.rot90(x,1,[4,2])      
+
+
+            else: 
+                x_rot=x   
+        else:
+            x_rot=x        
+
+        x = img2windows(x_rot, self.H_sp, self.W_sp,self.S_sp)
         x = x.reshape(-1, self.H_sp* self.W_sp * self.S_sp, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3).contiguous()
         return x
 
@@ -410,7 +425,7 @@ class LePEAttention(nn.Module):
 
 class SwinTransformerBlock(nn.Module):
 
-    def __init__(self, dim, input_resolution, num_heads,
+    def __init__(self, dim, input_resolution, num_heads, rot=0,
                  window_size=7, mlp_ratio=4., qkv_bias=False, qk_scale=None,
                  drop=0., attn_drop=0., drop_path=0.,
                  act_layer=nn.GELU, norm_layer=nn.LayerNorm,
@@ -424,6 +439,7 @@ class SwinTransformerBlock(nn.Module):
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.norm1 = norm_layer(dim)
         split_size=window_size
+        self.rot=rot
 
         if self.patches_resolution[0] == split_size:
             last_stage = True
@@ -437,14 +453,14 @@ class SwinTransformerBlock(nn.Module):
         if last_stage:
             self.attns = nn.ModuleList([
                 LePEAttention(
-                    dim, resolution=self.patches_resolution, idx = -1,
+                    dim, resolution=self.patches_resolution, idx = -1, rot=self.rot,
                     split_size=split_size, num_heads=num_heads, dim_out=dim,
                     qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
                 for i in range(self.branch_num)])
         else:
             self.attns = nn.ModuleList([
                 LePEAttention(
-                    dim//3, resolution=self.patches_resolution, idx = i,
+                    dim//3, resolution=self.patches_resolution, idx = i,rot=self.rot,
                     split_size=split_size, num_heads=num_heads//3, dim_out=dim//3,
                     qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
                 for i in range(self.branch_num)])
@@ -649,12 +665,12 @@ class BasicLayer(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            pSwinTransformerBlock(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
                     window_size=window_size,
-                    shift_size=0,
+                    rot=0,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_scale=qk_scale,
@@ -669,7 +685,7 @@ class BasicLayer(nn.Module):
                         input_resolution=input_resolution,
                         num_heads=num_heads,
                         window_size=window_size,
-                        
+                        rot=1,
                         mlp_ratio=mlp_ratio,
                         qkv_bias=qkv_bias,
                         qk_scale=qk_scale,
@@ -731,7 +747,7 @@ class BasicLayer(nn.Module):
         # for blk in self.blocks:
           
         #     x = blk(x)
-        x = self.blocks[0](x,attn_mask)
+        x = self.blocks[0](x)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x)
         
@@ -768,12 +784,12 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            pSwinTransformerBlock(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
                     window_size=window_size,
-                    shift_size=0,
+                    rot=0,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_scale=qk_scale,
@@ -788,7 +804,7 @@ class BasicLayer_up(nn.Module):
                         input_resolution=input_resolution,
                         num_heads=num_heads,
                         window_size=window_size,
-                        
+                        rot=1,
                         mlp_ratio=mlp_ratio,
                         qkv_bias=qkv_bias,
                         qk_scale=qk_scale,
@@ -834,7 +850,7 @@ class BasicLayer_up(nn.Module):
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x,attn_mask)
+        x = self.blocks[0](x)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x)
         
