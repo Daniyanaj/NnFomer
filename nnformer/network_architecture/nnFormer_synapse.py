@@ -354,7 +354,7 @@ class LePEAttention(nn.Module):
         self.W_sp = W_sp
         self.S_sp= S_sp
         stride = 1
-        self.get_v = nn.Conv3d(dim, dim, kernel_size=3, stride=1, padding=1,groups=dim)
+        self.get_v = nn.Conv3d(dim, dim, kernel_size=5, stride=1, padding=2,groups=dim)
 
         self.attn_drop = nn.Dropout(attn_drop)
 
@@ -419,7 +419,22 @@ class LePEAttention(nn.Module):
         x = x.transpose(1, 2).reshape(-1, self.H_sp* self.W_sp* self.S_sp, C)  # B head N N @ B head N C
 
         ### Window2Img
-        x = windows2img(x, self.H_sp, self.W_sp,self.S_sp, H, W,S).view(B, -1, C)  # B H' W' C
+        x = windows2img(x, self.H_sp, self.W_sp,self.S_sp, H, W,S).view(B,C,H,W,S)  # B H' W' C
+        if self.rot>0:
+            if self.H_sp==self.resolution[0]:
+                x_rot=torch.rot90(x,1,[3,2])
+            elif self.W_sp==self.resolution[0]:
+                x_rot=torch.rot90(x,1,[4,3])    
+            elif self.S_sp==self.resolution[0]:
+                x_rot=torch.rot90(x,1,[2,4])      
+
+
+            else: 
+                x_rot=x   
+        else:
+            x_rot=x 
+        x=x_rot
+        x=x.reshape(B,L,C)
 
         return x
 
