@@ -324,9 +324,9 @@ class SwinTransformerBlock(nn.Module):
             self.window_size = min(self.input_resolution)
         assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
 
-        self.attn = WindowAttention(
-            dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
-            qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=drop)
+        #self.attn = WindowAttention(
+        #    dim, window_size=to_3tuple(self.window_size), num_heads=num_heads,
+        #    qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=drop)
 
         self.padding = [self.window_size - self.shift_size, self.shift_size,
                         self.window_size - self.shift_size, self.shift_size,
@@ -334,10 +334,15 @@ class SwinTransformerBlock(nn.Module):
 
         self.norm1 = norm_layer(dim)
         # use group convolution to implement multi-head MLP
-        self.spatial_mlp = nn.Conv1d(self.num_heads * self.window_size ** 3,
+        if dim==768:
+            self.spatial_mlp = nn.Conv1d(self.num_heads * self.window_size ** 3,
                                      self.num_heads * self.window_size ** 3,
-                                     kernel_size=1,
-                                     groups=self.num_heads)
+                                     kernel_size=1, groups=dim)
+        else:
+            self.spatial_mlp = nn.Conv1d(self.num_heads * self.window_size ** 3,
+                                     self.num_heads * self.window_size ** 3,
+                                     kernel_size=1)                             
+                                     
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
@@ -353,7 +358,7 @@ class SwinTransformerBlock(nn.Module):
     def forward(self, x, mask_matrix):
 
         B, L, C = x.shape
-        if L==32768:
+        if L==0:
             S, H, W = self.input_resolution
    
             assert L == S * H * W, "input feature has wrong size"
@@ -1029,8 +1034,3 @@ class nnFormer(SegmentationNetwork):
             seg_outputs.append(self.final[0](out[-1]))
             return seg_outputs[-1]
         
-        
-        
-   
-
-   
