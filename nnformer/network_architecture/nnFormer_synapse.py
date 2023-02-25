@@ -353,7 +353,7 @@ class LePEAttention(nn.Module):
         self.W_sp = W_sp
         self.S_sp= S_sp
         stride = 1
-        self.get_v = nn.Conv3d(dim, dim, kernel_size=3, stride=1, padding=1,groups=dim)
+        self.get_v = nn.Conv3d(dim, dim, kernel_size=5, stride=1, padding=2,groups=dim)
 
         self.attn_drop = nn.Dropout(attn_drop)
 
@@ -454,6 +454,12 @@ class SwinTransformerBlock(nn.Module):
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, out_features=dim, act_layer=act_layer, drop=drop)
+        if dim==384:
+            self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
+        elif dim==768:    
+            self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
+        else:    
+            self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
         self.norm2 = norm_layer(dim)
 
     def forward(self, x):
@@ -461,26 +467,60 @@ class SwinTransformerBlock(nn.Module):
         x: B, H*W, C
         """
 
-        H = W = S= self.patches_resolution[0]
+        #H = W = S= self.patches_resolution[0]
         B, L, C = x.shape
-        assert L == H * W* S, "flatten img_tokens has wrong size"
-        img = self.norm1(x)
-        qkv = self.qkv(img).reshape(B, -1, 3, C).permute(2, 0, 1, 3)
+        if L==32768:
+            S= H=W = 32
+            #B, L, C = x.shape
+            assert L == H * W* S, "flatten img_tokens has wrong size"
+            img = self.norm1(x)
+            qkv = self.qkv(img).reshape(B, -1, 3, C).permute(2, 0, 1, 3)
+            
+            if self.branch_num == 3:
+                x1 = self.attns[0](qkv[:,:,:,:C//3])
+                x2 = self.attns[1](qkv[:,:,:,C//3:2*C//3])
+                x3 = self.attns[2](qkv[:,:,:,2*C//3:])
+                attened_x = torch.cat([x1,x2,x3], dim=2)
+
+            else:
+                attened_x = self.attns[0](qkv)
+            attened_x = self.proj(attened_x)
+            x = x + self.drop_path(attened_x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+
+            return x
+        elif L==4096:
+            
+            mlp=self.mlp_tokens
+            shortcut = x
+            x = self.norm1(x).transpose(1, 2)
+            x= mlp(x).transpose(1, 2)
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            return x
+
         
-        if self.branch_num == 3:
-            x1 = self.attns[0](qkv[:,:,:,:C//3])
-            x2 = self.attns[1](qkv[:,:,:,C//3:2*C//3])
-            x3 = self.attns[2](qkv[:,:,:,2*C//3:])
-            attened_x = torch.cat([x1,x2,x3], dim=2)
+        elif L==512:
+            
+            mlp= self.mlp_tokens_1
+            shortcut = x
+            x = self.norm1(x).transpose(1, 2)
+            x= mlp(x).transpose(1, 2)
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            return x
 
         else:
-            attened_x = self.attns[0](qkv)
-        attened_x = self.proj(attened_x)
-        x = x + self.drop_path(attened_x)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
+            
+            mlp=self.mlp_tokens_2
+            shortcut = x
+            x = self.norm1(x).transpose(1, 2)
+            x= mlp(x).transpose(1, 2)
+            x = shortcut + self.drop_path(x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
+            return x    
+          
 
-        return x
-      
 
 
 
@@ -649,12 +689,12 @@ class BasicLayer(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            pSwinTransformerBlock(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
                     window_size=window_size,
-                    shift_size=0,
+                    #shift_size=0,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_scale=qk_scale,
@@ -731,7 +771,7 @@ class BasicLayer(nn.Module):
         # for blk in self.blocks:
           
         #     x = blk(x)
-        x = self.blocks[0](x,attn_mask)
+        x = self.blocks[0](x)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x)
         
@@ -768,12 +808,12 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            pSwinTransformerBlock(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
                     window_size=window_size,
-                    shift_size=0,
+                    #shift_size=0,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_scale=qk_scale,
@@ -834,7 +874,7 @@ class BasicLayer_up(nn.Module):
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x,attn_mask)
+        x = self.blocks[0](x)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x)
         
