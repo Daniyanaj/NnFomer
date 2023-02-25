@@ -490,13 +490,14 @@ class SwinTransformerBlock(nn.Module):
 
             return x
         elif L==4096:
-            
             mlp=self.mlp_tokens
             shortcut = x
             x = self.norm1(x).transpose(1, 2)
             x= mlp(x).transpose(1, 2)
             x = shortcut + self.drop_path(x)
             x = x + self.drop_path(self.mlp(self.norm2(x)))
+            return x
+
             return x
 
         
