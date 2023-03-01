@@ -206,6 +206,10 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         else:
             target = target
             output = output
+        #print(len(output))
+        # print(output.shape)
+        # print(len(target))    
+        # print(target.shape)
         return super().run_online_evaluation(output, target)
 
     def validate(self, do_mirroring: bool = True, use_sliding_window: bool = True,
@@ -250,7 +254,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         return ret
 
     def run_iteration(self, data_generator, do_backprop=True, run_online_evaluation=False):
-        """
+        """0
         gradient clipping improves training stability
 
         :param data_generator:
@@ -276,9 +280,11 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
                 output = self.network(data)
                 del data
                 
-                l = self.loss(output, target)
-                # print(l)
-
+                l1 = self.loss(output[0], target)
+                l2 = self.loss(output[1], target)
+                # print(l) 
+            l=0.35*l1+0.65*l2     
+            #l=l1+l2              
             if do_backprop:
                 self.amp_grad_scaler.scale(l).backward()
                 self.amp_grad_scaler.unscale_(self.optimizer)
@@ -288,15 +294,17 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         else:
             output = self.network(data)
             del data
-            l = self.loss(output, target)
-
+            l1 = self.loss(output[0], target)
+            l2=self.loss(output[1], target)
+            #l=l1+l2
+            l=0.35*l1+0.65*l2  
             if do_backprop:
                 l.backward()
                 torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
                 self.optimizer.step()
 
         if run_online_evaluation:
-            self.run_online_evaluation(output, target)
+            self.run_online_evaluation(output[-1], target)
 
         del target
 

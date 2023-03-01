@@ -1005,6 +1005,10 @@ class nnFormer(SegmentationNetwork):
         window_size=window_size
         self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
         self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
+        
+        self.model_down2=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
+        self.decoder2=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
+        
         self.feature=nn.ConvTranspose3d(192,1,kernel_size=(4,4,4), stride=(2,4,4),padding=(1,0,0))
         self.out=nn.Conv3d(14,1,1,1)
         self.inp=nn.Conv3d(1,1,1,1)
@@ -1050,10 +1054,10 @@ class nnFormer(SegmentationNetwork):
         out=out[-1].permute(0,4,1,2,3)
         out=self.feature(out)
         first_ip=self.inp(first_ip)
-        inter= out +first_ip
-        skips2 = self.model_down(inter)
+        inter= out +first_ip+firstmap
+        skips2 = self.model_down2(inter)
         neck2=skips2[-1]
-        out2=self.decoder(neck2,skips2)
+        out2=self.decoder2(neck2,skips2)
 
         if self.do_ds:
             for i in range(len(out2)):  
@@ -1064,6 +1068,7 @@ class nnFormer(SegmentationNetwork):
         else:
             secondmap=self.final[0](out2[-1])
             seg_outputs.append(secondmap)    
-
+            return seg_outputs
+            
         
         
