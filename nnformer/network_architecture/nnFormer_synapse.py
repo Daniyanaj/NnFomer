@@ -1005,7 +1005,9 @@ class nnFormer(SegmentationNetwork):
         window_size=window_size
         self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
         self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
-        
+        self.feature=nn.ConvTranspose3d(192,1,kernel_size=(4,4,4), stride=(2,4,4),padding=(1,0,0))
+        self.out=nn.Conv3d(14,1,1,1)
+        self.inp=nn.Conv3d(1,1,1,1)
         self.final=[]
         if self.do_ds:
             
@@ -1014,20 +1016,24 @@ class nnFormer(SegmentationNetwork):
 
         else:
             self.final.append(final_patch_expanding(embed_dim,num_classes,patch_size=patch_size))
+
+
     
         self.final=nn.ModuleList(self.final)
-    
+        #self.patch_embed = PatchEmbed(
+         #   patch_size=patch_size, in_chans=input_channels, embed_dim=embed_dim,
+         #   norm_layer=nn.GELU )
 
     def forward(self, x):
       
-            
+        first_ip=x    
         seg_outputs=[]
         skips = self.model_down(x)
         neck=skips[-1]
        
         out=self.decoder(neck,skips)
         
-       
+        
             
         if self.do_ds:
             for i in range(len(out)):  
@@ -1036,7 +1042,28 @@ class nnFormer(SegmentationNetwork):
           
             return seg_outputs[::-1]
         else:
-            seg_outputs.append(self.final[0](out[-1]))
-            return seg_outputs[-1]
+            firstmap=self.final[0](out[-1])
+            seg_outputs.append(firstmap)
+            #return seg_outputs[-1]
+     
+        firstmap=self.out(firstmap)
+        out=out[-1].permute(0,4,1,2,3)
+        out=self.feature(out)
+        first_ip=self.inp(first_ip)
+        inter= out +first_ip
+        skips2 = self.model_down(inter)
+        neck2=skips2[-1]
+        out2=self.decoder(neck2,skips2)
+
+        if self.do_ds:
+            for i in range(len(out2)):  
+                seg_outputs.append(self.final[-(i+1)](out2[i]))
+        
+        
+            return seg_outputs[::-1]
+        else:
+            secondmap=self.final[0](out2[-1])
+            seg_outputs.append(secondmap)    
+
         
         
