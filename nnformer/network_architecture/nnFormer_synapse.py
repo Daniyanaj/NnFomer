@@ -546,7 +546,7 @@ class BasicLayer(nn.Module):
                  ):
         super().__init__()
         self.window_size = window_size
-        self.shift_size = window_size // 2
+        self.shift_size = 0
         self.depth = depth
         # build blocks
         
@@ -556,7 +556,7 @@ class BasicLayer(nn.Module):
                 input_resolution=input_resolution,
                 num_heads=num_heads,
                 window_size=window_size,
-                shift_size=0 if (i % 2 == 0) else window_size // 2,
+                shift_size=0 ,
                 mlp_ratio=mlp_ratio,
                 qkv_bias=qkv_bias,
                 qk_scale=qk_scale,
@@ -629,7 +629,7 @@ class BasicLayer_up(nn.Module):
                 ):
         super().__init__()
         self.window_size = window_size
-        self.shift_size = window_size // 2
+        self.shift_size = 0
         self.depth = depth
         self.dim=dim
         
@@ -639,12 +639,12 @@ class BasicLayer_up(nn.Module):
         
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock_kv(
+            SwinTransformerBlock(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
                     window_size=window_size,
-                    shift_size=0 ,
+                    shift_size=0,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_scale=qk_scale,
@@ -705,11 +705,197 @@ class BasicLayer_up(nn.Module):
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
         attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         
-        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
+        x = self.blocks[0](x, attn_mask)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x,attn_mask)
             
         return x, S, H, W
+
+
+class BasicLayer2(nn.Module):
+   
+    def __init__(self,
+                 dim,
+                 input_resolution,
+                 depth,
+                 num_heads,
+                 window_size=7,
+                 mlp_ratio=4.,
+                 qkv_bias=True,
+                 qk_scale=None,
+                 drop=0.,
+                 attn_drop=0.,
+                 drop_path=0.,
+                 norm_layer=nn.LayerNorm,
+                 downsample=True
+                 ):
+        super().__init__()
+        self.window_size = window_size
+        self.shift_size = window_size//2
+        self.depth = depth
+        # build blocks
+        
+        self.blocks = nn.ModuleList([
+            SwinTransformerBlock(
+                dim=dim,
+                input_resolution=input_resolution,
+                num_heads=num_heads,
+                window_size=window_size,
+                shift_size=window_size//2 ,
+                mlp_ratio=mlp_ratio,
+                qkv_bias=qkv_bias,
+                qk_scale=qk_scale,
+                drop=drop,
+                attn_drop=attn_drop,
+                drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+            for i in range(depth)])
+
+        # patch merging layer
+        if downsample is not None:
+            self.downsample = downsample(dim=dim, norm_layer=norm_layer)
+        else:
+            self.downsample = None
+
+    def forward(self, x, S, H, W):
+      
+
+        # calculate attention mask for SW-MSA
+        Sp = int(np.ceil(S / self.window_size)) * self.window_size
+        Hp = int(np.ceil(H / self.window_size)) * self.window_size
+        Wp = int(np.ceil(W / self.window_size)) * self.window_size
+        img_mask = torch.zeros((1, Sp, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
+        s_slices = (slice(0, -self.window_size),
+                    slice(-self.window_size, -self.shift_size),
+                    slice(-self.shift_size, None))
+        h_slices = (slice(0, -self.window_size),
+                    slice(-self.window_size, -self.shift_size),
+                    slice(-self.shift_size, None))
+        w_slices = (slice(0, -self.window_size),
+                    slice(-self.window_size, -self.shift_size),
+                    slice(-self.shift_size, None))
+        cnt = 0
+        for s in s_slices:
+            for h in h_slices:
+                for w in w_slices:
+                    img_mask[:, s, h, w, :] = cnt
+                    cnt += 1
+
+        mask_windows = window_partition(img_mask, self.window_size)  
+        mask_windows = mask_windows.view(-1,
+                                         self.window_size * self.window_size * self.window_size)  
+        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        for blk in self.blocks:
+          
+            x = blk(x, attn_mask)
+        if self.downsample is not None:
+            x_down = self.downsample(x, S, H, W)
+            Ws, Wh, Ww = (S + 1) // 2, (H + 1) // 2, (W + 1) // 2
+            return x, S, H, W, x_down, Ws, Wh, Ww
+        else:
+            return x, S, H, W, x, S, H, W
+
+class BasicLayer_up2(nn.Module):
+
+    def __init__(self,
+                 dim,
+                 input_resolution,
+                 depth,
+                 num_heads,
+                 window_size=7,
+                 mlp_ratio=4.,
+                 qkv_bias=True,
+                 qk_scale=None,
+                 drop=0.,
+                 attn_drop=0.,
+                 drop_path=0.,
+                 norm_layer=nn.LayerNorm,
+                 upsample=True
+                ):
+        super().__init__()
+        self.window_size = window_size
+        self.shift_size = window_size//2
+        self.depth = depth
+        self.dim=dim
+        
+
+        # build blocks
+       
+        
+        self.blocks = nn.ModuleList()
+        self.blocks.append(
+            SwinTransformerBlock(
+                    dim=dim,
+                    input_resolution=input_resolution,
+                    num_heads=num_heads,
+                    window_size=window_size,
+                    shift_size=window_size//2,
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    drop=drop,
+                    attn_drop=attn_drop,
+                    drop_path=drop_path[0] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+                    )
+        for i in range(depth-1):
+            self.blocks.append(
+                SwinTransformerBlock(
+                        dim=dim,
+                        input_resolution=input_resolution,
+                        num_heads=num_heads,
+                        window_size=window_size,
+                        shift_size=window_size // 2 ,
+                        mlp_ratio=mlp_ratio,
+                        qkv_bias=qkv_bias,
+                        qk_scale=qk_scale,
+                        drop=drop,
+                        attn_drop=attn_drop,
+                        drop_path=drop_path[i+1] if isinstance(drop_path, list) else drop_path, norm_layer=norm_layer)
+                        )
+            
+
+        
+        self.Upsample = upsample(dim=2*dim, norm_layer=norm_layer)
+    def forward(self, x,skip, S, H, W):
+        
+      
+        x_up = self.Upsample(x, S, H, W)
+       
+        x = x_up + skip
+        S, H, W = S * 2, H * 2, W * 2
+        # calculate attention mask for SW-MSA
+        Sp = int(np.ceil(S / self.window_size)) * self.window_size
+        Hp = int(np.ceil(H / self.window_size)) * self.window_size
+        Wp = int(np.ceil(W / self.window_size)) * self.window_size
+        img_mask = torch.zeros((1, Sp, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
+        s_slices = (slice(0, -self.window_size),
+                    slice(-self.window_size, -self.shift_size),
+                    slice(-self.shift_size, None))
+        h_slices = (slice(0, -self.window_size),
+                    slice(-self.window_size, -self.shift_size),
+                    slice(-self.shift_size, None))
+        w_slices = (slice(0, -self.window_size),
+                    slice(-self.window_size, -self.shift_size),
+                    slice(-self.shift_size, None))
+        cnt = 0
+        for s in s_slices:
+            for h in h_slices:
+                for w in w_slices:
+                    img_mask[:, s, h, w, :] = cnt
+                    cnt += 1
+
+        mask_windows = window_partition(img_mask, self.window_size)  # nW, window_size, window_size, 1
+        mask_windows = mask_windows.view(-1,
+                                         self.window_size * self.window_size * self.window_size)  # 3d��3��winds�˻�����Ŀ�Ǻܴ�ģ�����winds����̫��
+        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
+        
+        x = self.blocks[0](x, attn_mask)
+        for i in range(self.depth-1):
+            x = self.blocks[i+1](x,attn_mask)
+            
+        return x, S, H, W
+
         
 class project(nn.Module):
     def __init__(self,in_dim,out_dim,stride,padding,activate,norm,last=False):
@@ -798,6 +984,7 @@ class Encoder(nn.Module):
                  mlp_ratio=4.,
                  qkv_bias=True,
                  qk_scale=None,
+                 SH=True,
                  drop_rate=0.,
                  attn_drop_rate=0.,
                  drop_path_rate=0.2,
@@ -813,7 +1000,7 @@ class Encoder(nn.Module):
         self.embed_dim = embed_dim
         self.patch_norm = patch_norm
         self.out_indices = out_indices
-
+        self.SH=SH
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
             patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
@@ -829,25 +1016,46 @@ class Encoder(nn.Module):
         # build layers
         self.layers = nn.ModuleList()
         for i_layer in range(self.num_layers):
-            layer = BasicLayer(
-                dim=int(embed_dim * 2 ** i_layer),
-                input_resolution=(
-                    pretrain_img_size[0] // patch_size[0] // 2 ** i_layer, pretrain_img_size[1] // patch_size[1] // 2 ** i_layer,
-                    pretrain_img_size[2] // patch_size[2] // 2 ** i_layer),
-                depth=depths[i_layer],
-                num_heads=num_heads[i_layer],
-                window_size=window_size[i_layer],
-                mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                qk_scale=qk_scale,
-                drop=drop_rate,
-                attn_drop=attn_drop_rate,
-                drop_path=dpr[sum(
-                    depths[:i_layer]):sum(depths[:i_layer + 1])],
-                norm_layer=norm_layer,
-                downsample=PatchMerging
-                if (i_layer < self.num_layers - 1) else None
-                )
+            if self.SH==True:
+                layer = BasicLayer(
+                    dim=int(embed_dim * 2 ** i_layer),
+                    input_resolution=(
+                        pretrain_img_size[0] // patch_size[0] // 2 ** i_layer, pretrain_img_size[1] // patch_size[1] // 2 ** i_layer,
+                        pretrain_img_size[2] // patch_size[2] // 2 ** i_layer),
+                    depth=depths[i_layer],
+                    num_heads=num_heads[i_layer],
+                    window_size=window_size[i_layer],
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    drop=drop_rate,
+                    attn_drop=attn_drop_rate,
+                    drop_path=dpr[sum(
+                        depths[:i_layer]):sum(depths[:i_layer + 1])],
+                    norm_layer=norm_layer,
+                    downsample=PatchMerging
+                    if (i_layer < self.num_layers - 1) else None
+                    )
+            else:
+                layer = BasicLayer2(
+                    dim=int(embed_dim * 2 ** i_layer),
+                    input_resolution=(
+                        pretrain_img_size[0] // patch_size[0] // 2 ** i_layer, pretrain_img_size[1] // patch_size[1] // 2 ** i_layer,
+                        pretrain_img_size[2] // patch_size[2] // 2 ** i_layer),
+                    depth=depths[i_layer],
+                    num_heads=num_heads[i_layer],
+                    window_size=window_size[i_layer],
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    drop=drop_rate,
+                    attn_drop=attn_drop_rate,
+                    drop_path=dpr[sum(
+                        depths[:i_layer]):sum(depths[:i_layer + 1])],
+                    norm_layer=norm_layer,
+                    downsample=PatchMerging
+                    if (i_layer < self.num_layers - 1) else None
+                    )    
             self.layers.append(layer)
 
         num_features = [int(embed_dim * 2 ** i) for i in range(self.num_layers)]
@@ -894,6 +1102,7 @@ class Decoder(nn.Module):
                  depths=[2,2,2],
                  num_heads=[24,12,6],
                  window_size=4,
+                 SH=True,
                  mlp_ratio=4.,
                  qkv_bias=True,
                  qk_scale=None,
@@ -907,32 +1116,52 @@ class Decoder(nn.Module):
 
         self.num_layers = len(depths)
         self.pos_drop = nn.Dropout(p=drop_rate)
-
+        self.SH=SH  
         # stochastic depth
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
 
         # build layers
         self.layers = nn.ModuleList()
         for i_layer in range(self.num_layers)[::-1]:
-            
-            layer = BasicLayer_up(
-                dim=int(embed_dim * 2 ** (len(depths)-i_layer-1)),
-                input_resolution=(
-                    pretrain_img_size[0] // patch_size[0] // 2 ** (len(depths)-i_layer-1), pretrain_img_size[1] // patch_size[1] // 2 ** (len(depths)-i_layer-1),
-                    pretrain_img_size[2] // patch_size[2] // 2 ** (len(depths)-i_layer-1)),
-                depth=depths[i_layer],
-                num_heads=num_heads[i_layer],
-                window_size=window_size[i_layer],
-                mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
-                qk_scale=qk_scale,
-                drop=drop_rate,
-                attn_drop=attn_drop_rate,
-                drop_path=dpr[sum(
-                    depths[:i_layer]):sum(depths[:i_layer + 1])],
-                norm_layer=norm_layer,
-                upsample=Patch_Expanding
-                )
+            if self.SH==True:
+                layer = BasicLayer_up(
+                    dim=int(embed_dim * 2 ** (len(depths)-i_layer-1)),
+                    input_resolution=(
+                        pretrain_img_size[0] // patch_size[0] // 2 ** (len(depths)-i_layer-1), pretrain_img_size[1] // patch_size[1] // 2 ** (len(depths)-i_layer-1),
+                        pretrain_img_size[2] // patch_size[2] // 2 ** (len(depths)-i_layer-1)),
+                    depth=depths[i_layer],
+                    num_heads=num_heads[i_layer],
+                    window_size=window_size[i_layer],
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    drop=drop_rate,
+                    attn_drop=attn_drop_rate,
+                    drop_path=dpr[sum(
+                        depths[:i_layer]):sum(depths[:i_layer + 1])],
+                    norm_layer=norm_layer,
+                    upsample=Patch_Expanding
+                    )
+            else:
+                layer = BasicLayer_up2(
+                    dim=int(embed_dim * 2 ** (len(depths)-i_layer-1)),
+                    input_resolution=(
+                        pretrain_img_size[0] // patch_size[0] // 2 ** (len(depths)-i_layer-1), pretrain_img_size[1] // patch_size[1] // 2 ** (len(depths)-i_layer-1),
+                        pretrain_img_size[2] // patch_size[2] // 2 ** (len(depths)-i_layer-1)),
+                    depth=depths[i_layer],
+                    num_heads=num_heads[i_layer],
+                    window_size=window_size[i_layer],
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    drop=drop_rate,
+                    attn_drop=attn_drop_rate,
+                    drop_path=dpr[sum(
+                        depths[:i_layer]):sum(depths[:i_layer + 1])],
+                    norm_layer=norm_layer,
+                    upsample=Patch_Expanding
+                    )
+
             self.layers.append(layer)
         self.num_features = [int(embed_dim * 2 ** i) for i in range(self.num_layers)]
     def forward(self,x,skips):
@@ -967,7 +1196,27 @@ class final_patch_expanding(nn.Module):
         
         return x    
 
+class final_patch_expanding2(nn.Module):
+    def __init__(self,dim,num_class,patch_size):
+        super().__init__()
+        if dim==768:
 
+            self.up=nn.ConvTranspose3d(dim,num_class,[1,2,2],[9,18,18])
+            #self.up=nn.ConvTranspose3d(dim,num_class,[3,5,5],[8,12,12])
+        elif dim==384:
+            self.up=nn.ConvTranspose3d(dim,num_class,[4,8,8],[4,8,8])
+        else:
+            self.up=nn.ConvTranspose3d(dim,num_class,patch_size,patch_size)         
+      
+    def forward(self,x):
+        x=x.permute(0,4,1,2,3).contiguous()
+        B,C,S,H,W=x.shape
+        
+
+        x=self.up(x)
+      
+        
+        return x  
 
 
                                          
@@ -1003,11 +1252,11 @@ class nnFormer(SegmentationNetwork):
         num_heads=num_heads
         patch_size=patch_size
         window_size=window_size
-        self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
-        self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
+        self.model_down=Encoder(pretrain_img_size=crop_size,window_size=window_size,SH=True,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
+        self.decoder=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],SH=True,patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
         
-        self.model_down2=Encoder(pretrain_img_size=crop_size,window_size=window_size,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
-        self.decoder2=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
+        self.model_down2=Encoder(pretrain_img_size=crop_size,window_size=window_size,SH=False,embed_dim=embed_dim,patch_size=patch_size,depths=depths,num_heads=num_heads,in_chans=input_channels)
+        self.decoder2=Decoder(pretrain_img_size=crop_size,embed_dim=embed_dim,window_size=window_size[::-1][1:],SH=False,patch_size=patch_size,num_heads=num_heads[::-1][1:],depths=depths[::-1][1:])
         
         self.feature=nn.ConvTranspose3d(192,1,kernel_size=(4,4,4), stride=(2,4,4),padding=(1,0,0))
         self.out=nn.Conv3d(14,1,1,1)
@@ -1024,6 +1273,19 @@ class nnFormer(SegmentationNetwork):
 
     
         self.final=nn.ModuleList(self.final)
+        self.final2=[]
+        if True:
+            
+            for i in range(len(depths)-1):
+                self.final2.append(final_patch_expanding2(embed_dim*2**i,num_classes,patch_size=patch_size))
+
+        else:
+            self.final2.append(final_patch_expanding2(embed_dim,num_classes,patch_size=patch_size))
+
+
+    
+        self.final2=nn.ModuleList(self.final2)
+
         #self.patch_embed = PatchEmbed(
          #   patch_size=patch_size, in_chans=input_channels, embed_dim=embed_dim,
          #   norm_layer=nn.GELU )
@@ -1059,14 +1321,14 @@ class nnFormer(SegmentationNetwork):
         neck2=skips2[-1]
         out2=self.decoder2(neck2,skips2)
 
-        if self.do_ds:
+        if True:
             for i in range(len(out2)):  
-                seg_outputs.append(self.final[-(i+1)](out2[i]))
+                seg_outputs.append(self.final2[-(i+1)](out2[i]))
         
-        
-            return seg_outputs[::-1]
+            #print(len(seg_outputs))  
+            return seg_outputs
         else:
-            secondmap=self.final[0](out2[-1])
+            secondmap=self.final2[0](out2[-1])
             seg_outputs.append(secondmap)    
             return seg_outputs
             

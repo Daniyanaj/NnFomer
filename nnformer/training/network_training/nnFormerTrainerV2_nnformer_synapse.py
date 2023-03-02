@@ -66,7 +66,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         self.conv_op=nn.Conv3d
         
         self.embedding_dim=192
-        self.depths=[2, 1, 1, 1]
+        self.depths=[1, 1, 1, 1]
         self.num_heads=[6, 12, 24, 48]
         self.embedding_patch_size=[2,4,4]
         self.window_size=[4,4,8,4]
@@ -202,6 +202,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
         """
         if self.deep_supervision:
             target = target[0]
+            
             output = output[0]
         else:
             target = target
@@ -282,9 +283,11 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
                 
                 l1 = self.loss(output[0], target)
                 l2 = self.loss(output[1], target)
+                l3 = self.loss(output[2], target)
+                l4 = self.loss(output[3], target)
                 # print(l) 
-            l=0.35*l1+0.65*l2     
-            #l=l1+l2              
+            #l=0.35*l1+0.65*l2     
+            l=0.5*l1+ 0.25*l2+ 0.5*l3+ 1*l4              
             if do_backprop:
                 self.amp_grad_scaler.scale(l).backward()
                 self.amp_grad_scaler.unscale_(self.optimizer)
@@ -296,14 +299,20 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
             del data
             l1 = self.loss(output[0], target)
             l2=self.loss(output[1], target)
-            #l=l1+l2
-            l=0.35*l1+0.65*l2  
+            l3 = self.loss(output[2], target)
+            l4 = self.loss(output[3], target)
+                # print(l) 
+                
+            #l=l1+l2+l3+l4  
+            l=0.5*l1+ 0.25*l2+ 0.5*l3+ 1*l4     
+            #l=0.35*l1+0.65*l2  
             if do_backprop:
                 l.backward()
                 torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
                 self.optimizer.step()
 
         if run_online_evaluation:
+            #output=output[1]+output[2]+output[3]
             self.run_online_evaluation(output[-1], target)
 
         del target

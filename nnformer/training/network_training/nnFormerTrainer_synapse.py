@@ -12,7 +12,7 @@
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
 
-
+from medpy import metric
 import shutil
 from collections import OrderedDict
 from multiprocessing import Pool
@@ -108,6 +108,7 @@ class nnFormerTrainer_synapse(NetworkTrainer):
         self.loss = DC_and_CE_loss({'batch_dice': self.batch_dice, 'smooth': 1e-5, 'do_bg': False}, {})
 
         self.online_eval_foreground_dc = []
+        self.online_eval_foreground_hd= []
         self.online_eval_tp = []
         self.online_eval_fp = []
         self.online_eval_fn = []
@@ -684,6 +685,8 @@ class nnFormerTrainer_synapse(NetworkTrainer):
 
     def run_online_evaluation(self, output, target):
         with torch.no_grad():
+            outhd=output
+            tarhd=target
             num_classes = output.shape[1]
             output_softmax = softmax_helper(output)
             output_seg = output_softmax.argmax(1)
@@ -704,30 +707,59 @@ class nnFormerTrainer_synapse(NetworkTrainer):
                 fn_hard[:, i] = sum_tensor((output_seg != c).float() * (target == c).float(), axes=axes)
                 i+=1
 
+                
+
             tp_hard = tp_hard.sum(0, keepdim=False).detach().cpu().numpy()
             fp_hard = fp_hard.sum(0, keepdim=False).detach().cpu().numpy()
             fn_hard = fn_hard.sum(0, keepdim=False).detach().cpu().numpy()
-
+            
             self.online_eval_foreground_dc.append(list((2 * tp_hard) / (2 * tp_hard + fp_hard + fn_hard + 1e-8)))
+            #self.online_eval_foreground_hd.append(list(metric.binary.hd95(outhd, tarhd)))
             self.online_eval_tp.append(list(tp_hard))
             self.online_eval_fp.append(list(fp_hard))
             self.online_eval_fn.append(list(fn_hard))
+            self.online_eval_foreground_hd=[]
+            for c in range(1,num_classes):
+                if c in [10,12,13,5,9]:
+                    continue
+                #output_seg 
+                # is_all_zero = np.all(output_seg.cpu())
+                # if is_all_zero:
+                #     continue
+                #print(output_seg.cpu().numpy().sum())
+                #print(target.cpu().numpy().sum())
+                
+                #if output_seg.cpu().numpy().sum()>0 and target.cpu().numpy().sum() >0:
+                if (output_seg.cpu().numpy() == c).sum()>0 and (target.cpu().numpy() == c).sum()>0:
+                    hd95 = metric.binary.hd95((output_seg.cpu().numpy() == c),(target.cpu().numpy() == c))
+                    i+=1
+                    self.online_eval_foreground_hd.append(hd95)
+                else:
+                    self.online_eval_foreground_hd.append(0)
+
 
     def finish_online_evaluation(self):
         self.online_eval_tp = np.sum(self.online_eval_tp, 0)
         self.online_eval_fp = np.sum(self.online_eval_fp, 0)
         self.online_eval_fn = np.sum(self.online_eval_fn, 0)
+        global_hd = np.sum(self.online_eval_foreground_hd , 0)
 
         global_dc_per_class = [i for i in [2 * i / (2 * i + j + k) for i, j, k in
                                            zip(self.online_eval_tp, self.online_eval_fp, self.online_eval_fn)]
                                if not np.isnan(i)]
         self.all_val_eval_metrics.append(np.mean(global_dc_per_class))
+        # global_d_per_class = [i for i in [2 * i / (2 * i + j + k) for i, j, k in
+        #                                    zip(self.online_eval_tp, self.online_eval_fp, self.online_eval_fn)]
+        #                        if not np.isnan(i)]
+        #self.all_val_eval_metrics.append(np.mean(global_hd))
 
         self.print_to_log_file("Average global foreground Dice:", str(global_dc_per_class))
+        self.print_to_log_file("Average global foreground hd:", str(global_hd))
         self.print_to_log_file("(interpret this as an estimate for the Dice of the different classes. This is not "
                                "exact.)")
 
         self.online_eval_foreground_dc = []
+        self.online_eval_foreground_hd = []
         self.online_eval_tp = []
         self.online_eval_fp = []
         self.online_eval_fn = []

@@ -47,7 +47,6 @@ class NetworkTrainer(object):
         Training can be terminated early if the validation loss (or the target metric if implemented) do not improve
         anymore. This is based on a moving average (MA) of the loss/metric instead of the raw values to get more smooth
         results.
-
         What you need to override:
         - __init__
         - initialize
@@ -130,13 +129,9 @@ class NetworkTrainer(object):
     def initialize(self, training=True):
         """
         create self.output_folder
-
         modify self.output_folder if you are doing cross-validation (one folder per fold)
-
         set self.tr_gen and self.val_gen
-
         call self.initialize_network and self.initialize_optimizer_and_scheduler (important!)
-
         finally set self.was_initialized to True
         :param training:
         :return:
@@ -222,20 +217,15 @@ class NetworkTrainer(object):
             #below is et ..dice
             font = {'weight': 'normal',
                     'size': 18}
-
             matplotlib.rc('font', **font)
-
             fig = plt.figure(figsize=(30, 24))
             ax = fig.add_subplot(111)
             ax2 = ax.twinx()
-
             x_values = list(range(self.epoch + 1))
             
             ax.plot(x_values, self.plot_et, color='b', ls='-', label="dice_et")
             ax.plot(x_values, self.plot_tc, color='g', ls='-', label="dice_tc")
             ax.plot(x_values, self.plot_wt, color='r', ls='-', label="dice_wt")
-
-
             ax.set_xlabel("epoch")
             ax.set_ylabel("dice")
             ax.legend()
@@ -599,7 +589,7 @@ class NetworkTrainer(object):
             self.print_to_log_file("current best_val_eval_criterion_MA is %.4f0" % self.best_val_eval_criterion_MA)
             self.print_to_log_file("current val_eval_criterion_MA is %.4f" % self.val_eval_criterion_MA)
 
-            if self.val_eval_criterion_MA > self.best_val_eval_criterion_MA:
+            if self.val_eval_criterion_MA >self.best_val_eval_criterion_MA:
                 self.best_val_eval_criterion_MA = self.val_eval_criterion_MA
                 #self.print_to_log_file("saving best epoch checkpoint...")
                 if self.save_best_checkpoint: self.save_checkpoint(join(self.output_folder, "model_best.model"))
