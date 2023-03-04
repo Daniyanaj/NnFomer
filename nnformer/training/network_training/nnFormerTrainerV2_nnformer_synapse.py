@@ -15,7 +15,7 @@
 
 from collections import OrderedDict
 from typing import Tuple
-
+from fvcore.nn import FlopCountAnalysis
 import numpy as np
 import torch
 from nnformer.training.data_augmentation.data_augmentation_moreDA import get_moreDA_augmentation
@@ -177,10 +177,32 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
             #checkpoint = torch.load('/home/xychen/jsguo/weight/gelunorm_former_skip_global_shift.model', map_location='cpu')
             #self.network.load_state_dict(checkpoint)
             #print('I am using the pre_train weight!!')   
-        ml=self.network             
+
+        def count_parameters(model):
+            total_trainable_params = 0
+            for name, parameter in model.named_parameters():
+                if not parameter.requires_grad:
+                    continue
+                params = parameter.numel()
+                total_trainable_params += params
+            return total_trainable_params
+
+        model=self.network
+        total_params = count_parameters(model)
         
-        pytorch_total_params = sum(p.numel() for p in ml.parameters() if p.requires_grad)
-        print("Total parameters count", pytorch_total_params) 
+        # fvcore to calculate MAdds
+        input_res = (1, 64,128,128)
+        input = torch.ones(()).new_empty((1, *input_res), dtype=next(model.parameters()).dtype,
+                                        device=next(model.parameters()).device)
+        flops = FlopCountAnalysis(model, input)
+        model_flops = flops.total()
+        print(f"Total Trainable Params: {round(total_params * 1e-6, 2)} M")
+        print(f"MAdds: {round(model_flops * 1e-6, 2)} M")
+            
+                     
+        
+        # pytorch_total_params = sum(p.numel() for p in ml.parameters() if p.requires_grad)
+        # print("Total parameters count", pytorch_total_params) 
      
         if torch.cuda.is_available():
             self.network.cuda()
