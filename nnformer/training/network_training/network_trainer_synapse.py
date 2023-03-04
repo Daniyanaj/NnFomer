@@ -476,23 +476,24 @@ class NetworkTrainer(object):
 
             with torch.no_grad():
                 # validation with train=False
-                self.network.eval()
-                val_losses = []
-                for b in range(self.num_val_batches_per_epoch):
-                    l = self.run_iteration(self.val_gen, False, True)
-                    val_losses.append(l)
-                self.all_val_losses.append(np.mean(val_losses))
-                self.print_to_log_file("validation loss: %.4f" % self.all_val_losses[-1])
-
-                if self.also_val_in_tr_mode:
-                    self.network.train()
-                    # validation with train=True
+                if self.epoch>700:
+                    self.network.eval()
                     val_losses = []
                     for b in range(self.num_val_batches_per_epoch):
-                        l = self.run_iteration(self.val_gen, False)
+                        l = self.run_iteration(self.val_gen, False, True)
                         val_losses.append(l)
-                    self.all_val_losses_tr_mode.append(np.mean(val_losses))
-                    self.print_to_log_file("validation loss (train=True): %.4f" % self.all_val_losses_tr_mode[-1])
+                    self.all_val_losses.append(np.mean(val_losses))
+                    self.print_to_log_file("validation loss: %.4f" % self.all_val_losses[-1])
+
+                    if self.also_val_in_tr_mode:
+                        self.network.train()
+                        # validation with train=True
+                        val_losses = []
+                        for b in range(self.num_val_batches_per_epoch):
+                            l = self.run_iteration(self.val_gen, False)
+                            val_losses.append(l)
+                        self.all_val_losses_tr_mode.append(np.mean(val_losses))
+                        self.print_to_log_file("validation loss (train=True): %.4f" % self.all_val_losses_tr_mode[-1])
 
             self.update_train_loss_MA()  # needed for lr scheduler and stopping of training
 
@@ -579,20 +580,21 @@ class NetworkTrainer(object):
 
             if self.best_epoch_based_on_MA_tr_loss is None:
                 self.best_epoch_based_on_MA_tr_loss = self.epoch
+            
+            if self.epoch>700:
+                if self.best_val_eval_criterion_MA is None:
+                    self.best_val_eval_criterion_MA = self.val_eval_criterion_MA
 
-            if self.best_val_eval_criterion_MA is None:
-                self.best_val_eval_criterion_MA = self.val_eval_criterion_MA
+                # check if the current epoch is the best one according to moving average of validation criterion. If so
+                # then save 'best' model
+                # Do not use this for validation. This is intended for test set prediction only.
+                self.print_to_log_file("current best_val_eval_criterion_MA is %.4f0" % self.best_val_eval_criterion_MA)
+                #.print_to_log_file("current val_eval_criterion_MA is %.4f" % self.val_eval_criterion_MA)
 
-            # check if the current epoch is the best one according to moving average of validation criterion. If so
-            # then save 'best' model
-            # Do not use this for validation. This is intended for test set prediction only.
-            self.print_to_log_file("current best_val_eval_criterion_MA is %.4f0" % self.best_val_eval_criterion_MA)
-            self.print_to_log_file("current val_eval_criterion_MA is %.4f" % self.val_eval_criterion_MA)
-
-            if self.val_eval_criterion_MA >self.best_val_eval_criterion_MA:
-                self.best_val_eval_criterion_MA = self.val_eval_criterion_MA
-                #self.print_to_log_file("saving best epoch checkpoint...")
-                if self.save_best_checkpoint: self.save_checkpoint(join(self.output_folder, "model_best.model"))
+                if self.val_eval_criterion_MA >self.best_val_eval_criterion_MA:
+                    self.best_val_eval_criterion_MA = self.val_eval_criterion_MA
+                    #self.print_to_log_file("saving best epoch checkpoint...")
+                    if self.save_best_checkpoint: self.save_checkpoint(join(self.output_folder, "model_best.model"))
 
             # Now see if the moving average of the train loss has improved. If yes then reset patience, else
             # increase patience
@@ -621,16 +623,17 @@ class NetworkTrainer(object):
         return continue_training
 
     def on_epoch_end(self):
-        self.finish_online_evaluation()  # does not have to do anything, but can be used to update self.all_val_eval_
-        # metrics
+        if self.epoch>700:
+            self.finish_online_evaluation()  # does not have to do anything, but can be used to update self.all_val_eval_
+            # metrics
 
-        self.plot_progress()
+            #self.plot_progress()
 
-        
+            
 
-        self.maybe_save_checkpoint()
+            self.maybe_save_checkpoint()
 
-        self.update_eval_criterion_MA()
+            self.update_eval_criterion_MA()
         self.maybe_update_lr()
         continue_training = self.manage_patience()
         return continue_training

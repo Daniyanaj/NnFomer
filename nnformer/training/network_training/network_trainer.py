@@ -119,9 +119,12 @@ class NetworkTrainer(object):
             self.use_progress_bar = bool(int(os.environ['nnformer_use_progress_bar']))
 
         ################# Settings for saving checkpoints ##################################
-        self.save_every = 50
+        self.save_every = 400
         self.save_latest_only = False  # if false it will not store/overwrite _latest but separate files each
         # time an intermediate checkpoint is created
+        if self.epoch>700:
+            self.save_every = 100
+
         self.save_intermediate_checkpoints = False  # whether or not to save checkpoint_latest
         self.save_best_checkpoint = True  # whether or not to save the best checkpoint according to self.best_val_eval_criterion_MA
         self.save_final_checkpoint = True  # whether or not to save the final checkpoint
@@ -486,23 +489,24 @@ class NetworkTrainer(object):
 
             with torch.no_grad():
                 # validation with train=False
-                self.network.eval()
-                val_losses = []
-                for b in range(self.num_val_batches_per_epoch):
-                    l = self.run_iteration(self.val_gen, False, True)
-                    val_losses.append(l)
-                self.all_val_losses.append(np.mean(val_losses))
-                self.print_to_log_file("validation loss: %.4f" % self.all_val_losses[-1])
-
-                if self.also_val_in_tr_mode:
-                    self.network.train()
-                    # validation with train=True
+                if self.epoch>700:
+                    self.network.eval()
                     val_losses = []
                     for b in range(self.num_val_batches_per_epoch):
-                        l = self.run_iteration(self.val_gen, False)
+                        l = self.run_iteration(self.val_gen, False, True)
                         val_losses.append(l)
-                    self.all_val_losses_tr_mode.append(np.mean(val_losses))
-                    self.print_to_log_file("validation loss (train=True): %.4f" % self.all_val_losses_tr_mode[-1])
+                    self.all_val_losses.append(np.mean(val_losses))
+                    self.print_to_log_file("validation loss: %.4f" % self.all_val_losses[-1])
+
+                    if self.also_val_in_tr_mode:
+                        self.network.train()
+                        # validation with train=True
+                        val_losses = []
+                        for b in range(self.num_val_batches_per_epoch):
+                            l = self.run_iteration(self.val_gen, False)
+                            val_losses.append(l)
+                        self.all_val_losses_tr_mode.append(np.mean(val_losses))
+                        self.print_to_log_file("validation loss (train=True): %.4f" % self.all_val_losses_tr_mode[-1])
 
             self.update_train_loss_MA()  # needed for lr scheduler and stopping of training
 

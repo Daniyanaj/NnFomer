@@ -287,7 +287,7 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
                 l4 = self.loss(output[3], target)
                 # print(l) 
             #l=0.35*l1+0.65*l2     
-            l=0.5*l1+ 0.25*l2+ 0.5*l3+ 1*l4              
+            l=l1+ l2+ l3+ l4              
             if do_backprop:
                 self.amp_grad_scaler.scale(l).backward()
                 self.amp_grad_scaler.unscale_(self.optimizer)
@@ -303,17 +303,17 @@ class nnFormerTrainerV2_nnformer_synapse(nnFormerTrainer_synapse):
             l4 = self.loss(output[3], target)
                 # print(l) 
                 
-            #l=l1+l2+l3+l4  
-            l=0.5*l1+ 0.25*l2+ 0.5*l3+ 1*l4     
+            l=l1+l2+l3+l4  
+            #l=0.5*l1+ 0.25*l2+ 0.5*l3+ 1*l4     
             #l=0.35*l1+0.65*l2  
             if do_backprop:
                 l.backward()
                 torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
                 self.optimizer.step()
-
-        if run_online_evaluation:
-            #output=output[1]+output[2]+output[3]
-            self.run_online_evaluation(output[-1], target)
+        if self.epoch>700:
+            if run_online_evaluation:
+                #output=output[1]+output[2]+output[3]
+                self.run_online_evaluation(output[-1], target)
 
         del target
 

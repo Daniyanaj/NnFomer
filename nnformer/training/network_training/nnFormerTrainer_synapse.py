@@ -108,7 +108,7 @@ class nnFormerTrainer_synapse(NetworkTrainer):
         self.loss = DC_and_CE_loss({'batch_dice': self.batch_dice, 'smooth': 1e-5, 'do_bg': False}, {})
 
         self.online_eval_foreground_dc = []
-        self.online_eval_foreground_hd= []
+        #self.online_eval_foreground_hd= []
         self.online_eval_tp = []
         self.online_eval_fp = []
         self.online_eval_fn = []
@@ -718,10 +718,10 @@ class nnFormerTrainer_synapse(NetworkTrainer):
             self.online_eval_tp.append(list(tp_hard))
             self.online_eval_fp.append(list(fp_hard))
             self.online_eval_fn.append(list(fn_hard))
-            self.online_eval_foreground_hd=[]
-            for c in range(1,num_classes):
-                if c in [10,12,13,5,9]:
-                    continue
+            # self.online_eval_foreground_hd=[]
+            # for c in range(1,num_classes):
+            #     if c in [10,12,13,5,9]:
+            #         continue
                 #output_seg 
                 # is_all_zero = np.all(output_seg.cpu())
                 # if is_all_zero:
@@ -730,19 +730,19 @@ class nnFormerTrainer_synapse(NetworkTrainer):
                 #print(target.cpu().numpy().sum())
                 
                 #if output_seg.cpu().numpy().sum()>0 and target.cpu().numpy().sum() >0:
-                if (output_seg.cpu().numpy() == c).sum()>0 and (target.cpu().numpy() == c).sum()>0:
-                    hd95 = metric.binary.hd95((output_seg.cpu().numpy() == c),(target.cpu().numpy() == c))
-                    i+=1
-                    self.online_eval_foreground_hd.append(hd95)
-                else:
-                    self.online_eval_foreground_hd.append(0)
+                # if (output_seg.cpu().numpy() == c).sum()>0 and (target.cpu().numpy() == c).sum()>0:
+                #     hd95 = metric.binary.hd95((output_seg.cpu().numpy() == c),(target.cpu().numpy() == c))
+                #     i+=1
+                #     self.online_eval_foreground_hd.append(hd95)
+                # else:
+                #     self.online_eval_foreground_hd.append(0)
 
 
     def finish_online_evaluation(self):
         self.online_eval_tp = np.sum(self.online_eval_tp, 0)
         self.online_eval_fp = np.sum(self.online_eval_fp, 0)
         self.online_eval_fn = np.sum(self.online_eval_fn, 0)
-        global_hd = np.sum(self.online_eval_foreground_hd , 0)
+        #global_hd = np.sum(self.online_eval_foreground_hd , 0)
 
         global_dc_per_class = [i for i in [2 * i / (2 * i + j + k) for i, j, k in
                                            zip(self.online_eval_tp, self.online_eval_fp, self.online_eval_fn)]
@@ -754,12 +754,12 @@ class nnFormerTrainer_synapse(NetworkTrainer):
         #self.all_val_eval_metrics.append(np.mean(global_hd))
 
         self.print_to_log_file("Average global foreground Dice:", str(global_dc_per_class))
-        self.print_to_log_file("Average global foreground hd:", str(global_hd))
+        #self.print_to_log_file("Average global foreground hd:", str(global_hd))
         self.print_to_log_file("(interpret this as an estimate for the Dice of the different classes. This is not "
                                "exact.)")
 
         self.online_eval_foreground_dc = []
-        self.online_eval_foreground_hd = []
+        #self.online_eval_foreground_hd = []
         self.online_eval_tp = []
         self.online_eval_fp = []
         self.online_eval_fn = []
