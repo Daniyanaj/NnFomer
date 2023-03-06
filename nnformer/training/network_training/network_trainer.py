@@ -600,13 +600,14 @@ class NetworkTrainer(object):
             # check if the current epoch is the best one according to moving average of validation criterion. If so
             # then save 'best' model
             # Do not use this for validation. This is intended for test set prediction only.
-            self.print_to_log_file("current best_val_eval_criterion_MA is %.4f0" % self.best_val_eval_criterion_MA)
-            self.print_to_log_file("current val_eval_criterion_MA is %.4f" % self.val_eval_criterion_MA)
+            if self.epoch>0:
+                self.print_to_log_file("current best_val_eval_criterion_MA is %.4f0" % self.best_val_eval_criterion_MA)
+                self.print_to_log_file("current val_eval_criterion_MA is %.4f" % self.val_eval_criterion_MA)
 
-            if self.val_eval_criterion_MA > self.best_val_eval_criterion_MA:
-                self.best_val_eval_criterion_MA = self.val_eval_criterion_MA
-                #self.print_to_log_file("saving best epoch checkpoint...")
-                if self.save_best_checkpoint: self.save_checkpoint(join(self.output_folder, "model_best.model"))
+                if self.val_eval_criterion_MA > self.best_val_eval_criterion_MA:
+                    self.best_val_eval_criterion_MA = self.val_eval_criterion_MA
+                    #self.print_to_log_file("saving best epoch checkpoint...")
+                    if self.save_best_checkpoint: self.save_checkpoint(join(self.output_folder, "model_best.model"))
 
             # Now see if the moving average of the train loss has improved. If yes then reset patience, else
             # increase patience
@@ -635,16 +636,17 @@ class NetworkTrainer(object):
         return continue_training
 
     def on_epoch_end(self):
-        self.finish_online_evaluation()  # does not have to do anything, but can be used to update self.all_val_eval_
+        if self.epoch>0:
+            self.finish_online_evaluation()  # does not have to do anything, but can be used to update self.all_val_eval_
         # metrics
-
-        self.plot_progress()
+            self.update_eval_criterion_MA()
+            #self.plot_progress()
 
         
 
         self.maybe_save_checkpoint()
 
-        self.update_eval_criterion_MA()
+        
         self.maybe_update_lr()
         continue_training = self.manage_patience()
         return continue_training
