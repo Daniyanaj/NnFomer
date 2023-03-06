@@ -106,12 +106,12 @@ def main():
                              'Optional. Beta. Use with caution.')
 
     args = parser.parse_args()
-    task='2'
+    task='1'
     #    task = args.task
     #fold = args.fold
     fold='0'
     network = "3d_fullres"
-    network_trainer = "nnFormerTrainerV2_nnformer_synapse"
+    network_trainer = "nnFormerTrainerV2_nnformer_tumor"
     validation_only = args.validation_only
     plans_identifier = args.p
     find_lr = args.find_lr

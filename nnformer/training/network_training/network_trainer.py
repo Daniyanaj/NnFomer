@@ -122,7 +122,7 @@ class NetworkTrainer(object):
         self.save_every = 400
         self.save_latest_only = False  # if false it will not store/overwrite _latest but separate files each
         # time an intermediate checkpoint is created
-        if self.epoch>700:
+        if self.epoch>0:
             self.save_every = 100
 
         self.save_intermediate_checkpoints = False  # whether or not to save checkpoint_latest
@@ -489,7 +489,7 @@ class NetworkTrainer(object):
 
             with torch.no_grad():
                 # validation with train=False
-                if self.epoch>700:
+                if self.epoch>0:
                     self.network.eval()
                     val_losses = []
                     for b in range(self.num_val_batches_per_epoch):

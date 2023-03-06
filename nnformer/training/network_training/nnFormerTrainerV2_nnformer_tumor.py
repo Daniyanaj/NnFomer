@@ -68,7 +68,7 @@ class nnFormerTrainerV2_nnformer_tumor(nnFormerTrainer):
         self.conv_op=nn.Conv3d
         
         self.embedding_dim=96
-        self.depths=[2, 2, 2, 2]
+        self.depths=[1,1,1,1]
         self.num_heads=[3, 6, 12, 24]
         self.embedding_patch_size=[4,4,4]
         self.window_size=[4,4,8,4]
@@ -284,7 +284,9 @@ class nnFormerTrainerV2_nnformer_tumor(nnFormerTrainer):
                 output = self.network(data)
                 del data
                 
-                l = self.loss(output, target)
+                l1 = self.loss(output[0], target)
+                l2 = self.loss(output[1], target)
+                l=l1+l2
 
             if do_backprop:
                 self.amp_grad_scaler.scale(l).backward()
@@ -295,15 +297,16 @@ class nnFormerTrainerV2_nnformer_tumor(nnFormerTrainer):
         else:
             output = self.network(data)
             del data
-            l = self.loss(output, target)
-
+            l1 = self.loss(output[0], target)
+            l2 = self.loss(output[1], target)
+            l=l1+l2
             if do_backprop:
                 l.backward()
                 torch.nn.utils.clip_grad_norm_(self.network.parameters(), 12)
                 self.optimizer.step()
 
         if run_online_evaluation:
-            self.run_online_evaluation(output, target)
+            self.run_online_evaluation(output[-1], target)
 
         del target
 
@@ -416,7 +419,8 @@ class nnFormerTrainerV2_nnformer_tumor(nnFormerTrainer):
        'BRATS_413', 'BRATS_414', 'BRATS_415', 'BRATS_417', 'BRATS_418',
        'BRATS_419', 'BRATS_420', 'BRATS_421', 'BRATS_422', 'BRATS_423',
        'BRATS_424', 'BRATS_426', 'BRATS_428', 'BRATS_429', 'BRATS_430',
-       'BRATS_431', 'BRATS_433', 'BRATS_434', 'BRATS_435', 'BRATS_436',
+       ])
+            splits[self.fold]['val']=np.array(['BRATS_431', 'BRATS_433', 'BRATS_434', 'BRATS_435', 'BRATS_436',
        'BRATS_437', 'BRATS_438', 'BRATS_439', 'BRATS_441', 'BRATS_442',
        'BRATS_443', 'BRATS_444', 'BRATS_445', 'BRATS_446', 'BRATS_449',
        'BRATS_451', 'BRATS_452', 'BRATS_453', 'BRATS_454', 'BRATS_455',
@@ -428,21 +432,6 @@ class nnFormerTrainerV2_nnformer_tumor(nnFormerTrainer):
        'BRATS_448', 'BRATS_456', 'BRATS_461', 'BRATS_462', 'BRATS_465',
        'BRATS_471', 'BRATS_473', 'BRATS_474', 'BRATS_476', 'BRATS_479',
        'BRATS_480', 'BRATS_484'])
-            splits[self.fold]['val']=np.array(['BRATS_011', 'BRATS_012', 'BRATS_018', 'BRATS_020', 'BRATS_021',
-       'BRATS_028', 'BRATS_029', 'BRATS_032', 'BRATS_034', 'BRATS_036',
-       'BRATS_041', 'BRATS_047', 'BRATS_049', 'BRATS_053', 'BRATS_056',
-       'BRATS_057', 'BRATS_069', 'BRATS_071', 'BRATS_089', 'BRATS_090',
-       'BRATS_092', 'BRATS_095', 'BRATS_103', 'BRATS_105', 'BRATS_106',
-       'BRATS_107', 'BRATS_109', 'BRATS_118', 'BRATS_145', 'BRATS_147',
-       'BRATS_156', 'BRATS_161', 'BRATS_172', 'BRATS_176', 'BRATS_181',
-       'BRATS_194', 'BRATS_196', 'BRATS_198', 'BRATS_204', 'BRATS_205',
-       'BRATS_209', 'BRATS_220', 'BRATS_221', 'BRATS_227', 'BRATS_234',
-       'BRATS_235', 'BRATS_245', 'BRATS_250', 'BRATS_256', 'BRATS_257',
-       'BRATS_260', 'BRATS_269', 'BRATS_270', 'BRATS_271', 'BRATS_281',
-       'BRATS_282', 'BRATS_287', 'BRATS_289', 'BRATS_291', 'BRATS_292',
-       'BRATS_310', 'BRATS_314', 'BRATS_323', 'BRATS_327', 'BRATS_330',
-       'BRATS_333', 'BRATS_337', 'BRATS_346', 'BRATS_350', 'BRATS_352',
-       'BRATS_361', 'BRATS_382', 'BRATS_397'])
             if self.fold < len(splits):
                 tr_keys = splits[self.fold]['train']
                 val_keys = splits[self.fold]['val']
@@ -578,5 +567,5 @@ class nnFormerTrainerV2_nnformer_tumor(nnFormerTrainer):
         else:
             self.network.do_ds = False
         ret = super().run_training()
-        self.network.do_ds = ds
+        #self.network.do_ds = ds
         return ret

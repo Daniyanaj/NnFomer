@@ -476,7 +476,7 @@ class NetworkTrainer(object):
 
             with torch.no_grad():
                 # validation with train=False
-                if self.epoch>700:
+                if self.epoch>0:
                     self.network.eval()
                     val_losses = []
                     for b in range(self.num_val_batches_per_epoch):
@@ -581,7 +581,7 @@ class NetworkTrainer(object):
             if self.best_epoch_based_on_MA_tr_loss is None:
                 self.best_epoch_based_on_MA_tr_loss = self.epoch
             
-            if self.epoch>700:
+            if self.epoch>0:
                 if self.best_val_eval_criterion_MA is None:
                     self.best_val_eval_criterion_MA = self.val_eval_criterion_MA
 
@@ -623,7 +623,7 @@ class NetworkTrainer(object):
         return continue_training
 
     def on_epoch_end(self):
-        if self.epoch>700:
+        if self.epoch>0:
             self.finish_online_evaluation()  # does not have to do anything, but can be used to update self.all_val_eval_
             # metrics
 
