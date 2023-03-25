@@ -96,19 +96,22 @@ class SwinTransformerBlock_kv(nn.Module):
         B, L, C = x.shape
         S, H, W = self.input_resolution
         if True:
-            if L==22400:
+            if L==19200:
 
-                S=14
-                H=W = 40
-            elif L==5600:
-                S=14
-                H=W=20
-            elif L==700:
-                S=7
-                H=W=10    
+                H=12
+                S=W = 40
+                
+            
+            elif L==4800:
+                H=12
+                S=W=20
+            
+            elif L==600:
+                H=6
+                S=W=10    
             else:
-                S=3
-                H=W=5  
+                H=3
+                S=W=5 
         
             #print(L)
             assert L == S * H * W, "input feature has wrong size"
@@ -276,6 +279,211 @@ class WindowAttention_kv(nn.Module):
         x = self.proj_drop(x)
         return x
 
+def img2windows(img, H_sp, W_sp, S_sp):
+    """
+    img: B C H W S
+    """
+    B, C, H, W, S = img.shape
+    img_reshape = img.view(B, C, H // H_sp, H_sp, W // W_sp, W_sp, S //S_sp, S_sp)
+    img_perm = img_reshape.permute(0, 2, 4, 3, 5, 6,7, 1).contiguous().reshape(-1, H_sp* W_sp*S_sp, C)
+    return img_perm
+
+def windows2img(img_splits_hw, H_sp, W_sp, S_sp, H, W, S):
+    """
+    img_splits_hw: B' H W S C
+    """
+    B = int(img_splits_hw.shape[0] / (H * W *S / H_sp / W_sp /S_sp))
+    # if W_sp=40:
+    #     H=15
+
+    img = img_splits_hw.view(B, H // H_sp, W // W_sp, S //S_sp, H_sp, W_sp, S_sp,-1)
+    img = img.permute(0, 1, 4, 2, 5, 3,6,7).contiguous().view(B, H, W, S,-1)
+    return img
+
+class LePEAttention(nn.Module):
+    def __init__(self, dim, resolution, idx, split_size=7, dim_out=None, num_heads=8, attn_drop=0., proj_drop=0., qk_scale=None):
+        super().__init__()
+        self.dim = dim
+        self.dim_out = dim_out or dim
+        self.resolution = resolution
+        self.split_size = split_size
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        if dim==32:
+            self.resolution=(12,40,40)
+        elif dim==48:
+            self.resolution=(12,20,20)
+        elif dim==96:
+            self.resolution=(6,10,10)    
+        else:
+            self.resolution=(3,5,5)   
+
+                
+
+        
+        # NOTE scale factor was wrong in my original version, can set manually to be compat with prev weights
+        self.scale = qk_scale or head_dim ** -0.5
+        if idx == -1:
+            H_sp, W_sp, S_sp = self.resolution[0], self.resolution[1], self.resolution[2]
+        elif idx == 0:
+            H_sp, W_sp , S_sp= self.resolution[0], self.split_size[1], self.split_size[2]
+        elif idx == 1:
+            W_sp, H_sp,S_sp = self.resolution[1], self.split_size[0],self.split_size[2]
+        elif idx == 2:
+            S_sp , W_sp, H_sp= self.resolution[2], self.split_size[1],self.split_size[0]    
+        else:
+            print ("ERROR MODE", idx)
+            exit(0)
+        self.H_sp = H_sp
+        self.W_sp = W_sp
+        self.S_sp= S_sp
+        stride = 1
+        self.get_v = nn.Conv3d(dim, dim, kernel_size=5, stride=1, padding=2,groups=dim)
+
+        self.attn_drop = nn.Dropout(attn_drop)
+
+    def im2cswin(self, x):
+        B, L, C = x.shape
+        
+        if L==19200:
+
+            H=12
+            S=W = 40
+            
+        #     x = x.permute(0,2,3,4,1)
+        #     if self.H_sp==14:
+        #         pad_r = 0
+        #         pad_b = 0
+        #         pad_g = 0 #(self.H_sp - H % self.H_sp) % self.H_sp
+        #         x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g)) 
+        #     elif self.W_sp==40:
+        #         #pad_r = (self.split_size[2] - W % self.split_size[2]) % self.split_size[2]
+        #         pad_b = (self.split_size[1] - S % self.split_size[1]) % self.split_size[1]
+        #         pad_g = (self.split_size[0] - H % self.split_size[0]) % self.split_size[0]
+        #         pad_r=0
+        #         x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g)) 
+        #     elif self.S_sp==40:
+        #         pad_r = (self.split_size[1] - W % self.split_size[1]) % self.split_size[1]
+        #         pad_b = 0
+        #         pad_g = (self.split_size[0] - H % self.split_size[0]) % self.split_size[0]
+
+        #         x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))    
+        elif L==4800:
+            H=12
+            S=W=20
+        #     x = x.transpose(-2,-1).view(B, C, H, W,S)
+        #     x = x.permute(0,2,3,4,1)
+        #     if self.H_sp==14:
+        #         pad_r = 0
+            #     pad_b = 0
+            #     pad_g = 0 #(self.H_sp - H % self.H_sp) % self.H_sp
+            #     x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g)) 
+            # elif self.W_sp==20:
+            #     #pad_r = (self.split_size[2] - W % self.split_size[2]) % self.split_size[2]
+            #     pad_b = (self.split_size[1] - S % self.split_size[1]) % self.split_size[1]
+            #     pad_g = (self.split_size[0] - H % self.split_size[0]) % self.split_size[0]
+            #     pad_r=0
+            #     x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g)) 
+            # elif self.S_sp==20:
+            #     pad_r = (self.split_size[1] - W % self.split_size[1]) % self.split_size[1]
+            #     pad_b = 0
+            #     pad_g = (self.split_size[0] - H % self.split_size[0]) % self.split_size[0]
+
+            #     x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))
+        elif L==600:
+            H=6
+            S=W=10    
+        else:
+            H=3
+            S=W=5  
+        #x=x.view(B,L,C)    
+        x = x.transpose(-2,-1).view(B, C, H, W,S)
+        #x=x.permute(0,4,1,2,3)
+        #x=x.view(B,C,H,W,S)
+        x = img2windows(x, self.H_sp, self.W_sp,self.S_sp)
+        x = x.reshape(-1, self.H_sp* self.W_sp * self.S_sp, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3).contiguous()
+        return x
+
+    def get_lepe(self, x, func):
+        B, L, C = x.shape
+        #H = self.resolution[0]
+        #W=S = self.resolution[2]
+        if L==19200:
+
+            H=12
+            S=W = 40
+    
+        elif L==4800:
+            H=12
+            S=W=20
+            
+        elif L==600:
+            H=6
+            S=W=10    
+        else:
+            H=3
+            S=W=5 
+        x = x.transpose(-2,-1).contiguous().view(B, C, H, W,S)
+        
+
+        H_sp, W_sp, S_sp  = self.H_sp, self.W_sp, self.S_sp
+        
+        
+        #x=x.permute(0,4,1,2,3)
+        x = x.view(B, C, H // H_sp, H_sp, W // W_sp, W_sp,S //S_sp, S_sp)
+
+        x = x.permute(0, 2, 4,6, 1, 3, 5,7).contiguous().reshape(-1, C, H_sp, W_sp,S_sp) ### B', C, H', W'
+        #x = x.permute(0, 2, 4, 1, 3, 5).contiguous().reshape(-1, C, H_sp, W_sp)
+        lepe = func(x) ### B', C, H', W'
+        lepe = lepe.reshape(-1, self.num_heads, C // self.num_heads, H_sp * W_sp*S_sp).permute(0, 1, 3, 2).contiguous()
+
+        x = x.reshape(-1, self.num_heads, C // self.num_heads, self.H_sp* self.W_sp*self.S_sp).permute(0, 1, 3, 2).contiguous()
+        return x, lepe
+
+    def forward(self, qkv):
+        """
+        x: B L C
+        """
+        q,k,v = qkv[0], qkv[1], qkv[2]
+
+        ### Img2Window
+        #H = self.resolution[0]
+        #W=S=self.resolution[2]
+        B, L, C = q.shape
+        if L==19200:
+
+            H=12
+            S=W = 40
+    
+        elif L==4800:
+            H=12
+            S=W=20
+            
+        elif L==600:
+            H=6
+            S=W=10    
+        else:
+            H=3
+            S=W=5 
+        assert L == H * W*S, "flatten img_tokens has wrong size"
+        
+        q = self.im2cswin(q)
+        k = self.im2cswin(k)
+        v, lepe = self.get_lepe(v, self.get_v)
+
+        q = q * self.scale
+        attn = (q @ k.transpose(-2, -1))  # B head N C @ B head C N --> B head N N
+        attn = nn.functional.softmax(attn, dim=-1, dtype=attn.dtype)
+        attn = self.attn_drop(attn)
+
+        x = (attn @ v) + lepe
+        x = x.transpose(1, 2).reshape(-1, self.H_sp* self.W_sp* self.S_sp, C)  # B head N N @ B head N C
+
+        ### Window2Img
+        x = windows2img(x, self.H_sp, self.W_sp,self.S_sp, H, W,S).view(B, -1, C)  # B H' W' C
+
+        return x            
+
 class WindowAttention(nn.Module):
 
     def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0.):
@@ -384,25 +592,6 @@ class SwinTransformerBlock(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
-        # self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
-        # self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
-        # self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
-        
-        self.padding = [self.window_size[0] - self.shift_size[0], self.shift_size[0],
-                        self.window_size[1] - self.shift_size[1], self.shift_size[1],
-                        self.window_size[2]- self.shift_size[2], self.shift_size[2]]  # P_l,P_r,P_t,P_b
-
-        #self.norm1 = norm_layer(dim)
-        # use group convolution to implement multi-head MLP
-        self.spatial_mlp = nn.Conv1d(self.num_heads * self.window_size[0] *self.window_size[1]*self.window_size[2],
-                                     self.num_heads * self.window_size[0] *self.window_size[1]*self.window_size[2],
-                                     kernel_size=1,
-                                     groups=self.num_heads)
-        
-        self.mlp_tokens = Mlp(in_features=5600, hidden_features=5600, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_1 = Mlp(in_features=700, hidden_features=700, act_layer=act_layer, drop=drop)
-        self.mlp_tokens_2 = Mlp(in_features=75, hidden_features=75, act_layer=act_layer, drop=drop)
-        self.m=Mlp(in_features=1280, hidden_features=1280, act_layer=act_layer, drop=drop)
         
        
     def forward(self, x, mask_matrix):
@@ -414,172 +603,178 @@ class SwinTransformerBlock(nn.Module):
         """
         
         B, L, C = x.shape
-        S, H, W = self.input_resolution
-        if L==22400:
-            S=14
-            H=W = 40
-            #S= H=W = 32
-   
-            assert L == S * H * W, "input feature has wrong size"
-            shortcut = x
-            x = self.norm1(x)
-            x = x.view(B, S, H, W, C)
+        if L==19200:
 
-            # pad feature maps to multiples of window size
-            pad_r = (self.window_size[2] - W % self.window_size[2]) % self.window_size[2]
-            pad_b = (self.window_size[1] - H % self.window_size[1]) % self.window_size[1]
-            pad_g = (self.window_size[0] - S % self.window_size[0]) % self.window_size[0]
+            H=12
+            S=W = 40
+            
+        
+        elif L==4800:
+            H=12
+            S=W=20
+        
+        elif L==600:
+            H=6
+            S=W=10    
+        else:
+            H=3
+            S=W=5 
+        
+        assert L == S * H * W, "input feature has wrong size"
+        
+        shortcut = x
+        x = self.norm1(x)
+        x = x.view(B, S, H, W, C)
 
-            x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-            _, Sp, Hp, Wp, _ = x.shape
+        # pad feature maps to multiples of window size
+        pad_r = (self.window_size[2] - W % self.window_size[2]) % self.window_size[2]
+        pad_b = (self.window_size[1] - H % self.window_size[1]) % self.window_size[1]
+        pad_g = (self.window_size[0] - S % self.window_size[0]) % self.window_size[0]
 
-            # cyclic shift
-            if min(self.shift_size) > 0:
-                shifted_x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1],-self.shift_size[2]), dims=(1, 2,3))
-                attn_mask = mask_matrix
+        x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
+        _, Sp, Hp, Wp, _ = x.shape
+
+        # cyclic shift
+        if min(self.shift_size) > 0:
+            shifted_x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1],-self.shift_size[2]), dims=(1, 2,3))
+            attn_mask = mask_matrix
+        else:
+            shifted_x = x
+            attn_mask = None
+
+        # partition windows
+        x_windows = window_partition(shifted_x, self.window_size)  
+        x_windows = x_windows.view(-1, self.window_size[0] * self.window_size[1] * self.window_size[2],
+                                   C)  
+
+        # W-MSA/SW-MSA
+       
+        attn_windows=self.attn(x_windows)
+        # merge windows
+        attn_windows = attn_windows.view(-1, self.window_size[0], self.window_size[1], self.window_size[2], C)
+        shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp)  # B H' W' C
+
+        # reverse cyclic shift
+        if min(self.shift_size) > 0:
+            x = torch.roll(shifted_x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]), dims=(1, 2, 3))
+        else:
+            x = shifted_x
+
+        if pad_r > 0 or pad_b > 0 or pad_g > 0:
+            x = x[:, :S, :H, :W, :].contiguous()
+
+        x = x.view(B, S * H * W, C)
+
+        # FFN
+        x = shortcut + self.drop_path(x)
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
+
+        return x        
+
+class SwinTransformerBlockcswin(nn.Module):
+    
+    def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
+                 mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., drop_path=0.,
+                 act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+        super().__init__()
+        
+        self.dim = dim
+        self.num_heads = num_heads
+        self.patches_resolution = input_resolution
+        self.split_size = window_size
+        self.mlp_ratio = mlp_ratio
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.norm1 = norm_layer(dim)
+        self.norm2 = norm_layer(dim)
+        split_size=window_size
+        last_stage=False       
+        if self.patches_resolution[2] == split_size[2]:
+            last_stage = True
+        if last_stage:
+            self.branch_num = 1
+        else:
+            self.branch_num = 3
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(drop)
+        
+        if last_stage:
+            self.attns = nn.ModuleList([
+                LePEAttention(
+                    dim, resolution=self.patches_resolution, idx = -1,
+                    split_size=split_size, num_heads=num_heads, dim_out=dim,
+                    qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
+                for i in range(self.branch_num)])
+        else:
+            self.attns = nn.ModuleList([
+                LePEAttention(
+                    dim//3, resolution=self.patches_resolution, idx = i,
+                    split_size=split_size, num_heads=num_heads//3, dim_out=dim//3,
+                    qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
+                for i in range(self.branch_num)])
+        
+
+        mlp_hidden_dim = int(dim * mlp_ratio)
+
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, out_features=dim, act_layer=act_layer, drop=drop)
+        
+       
+    def forward(self, x, mask_matrix):
+        """ Forward function.
+        Args:
+            x: Input feature, tensor size (B, H*W, C).
+            H, W: Spatial resolution of the input feature.
+            mask_matrix: Attention mask for cyclic shift.
+        """
+        
+        B, L, C = x.shape
+        S, H, W = self.patches_resolution
+        if True:
+            if L==19200:
+
+                H=12
+                S=W = 40
+                
+            
+            elif L==4800:
+                H=12
+                S=W=20
+            
+            elif L==600:
+                H=6
+                S=W=10    
             else:
-                shifted_x = x
-                attn_mask = None
+                H=3
+                S=W=5 
+            
+            assert L == H * W* S, "flatten img_tokens has wrong size"
+            img = self.norm1(x)
+            qkv = self.qkv(img).reshape(B, -1, 3, C).permute(2, 0, 1, 3)
+            
+            if self.branch_num == 3:
+                x1 = self.attns[0](qkv[:,:,:,:C//3])
+                x2 = self.attns[1](qkv[:,:,:,C//3:2*C//3])
+                x3 = self.attns[2](qkv[:,:,:,2*C//3:])
+                attened_x = torch.cat([x1,x2,x3], dim=2)
 
-            # partition windows
-            x_windows = window_partition(shifted_x, self.window_size)  
-            x_windows = x_windows.view(-1, self.window_size[0] * self.window_size[1] * self.window_size[2],
-                                    C)   
-            x_windows_heads = x_windows.view(-1, self.window_size[0] * self.window_size[1]*self.window_size[2], self.num_heads, C // self.num_heads)
-            x_windows_heads = x_windows_heads.transpose(1, 2)  # nW*B, nH, window_size*window_size, C//nH
-            x_windows_heads = x_windows_heads.reshape(-1, self.num_heads * self.window_size[0] * self.window_size[1]*self.window_size[2],
-                                                    C // self.num_heads)
+            else:
+                attened_x = self.attns[0](qkv)
+            attened_x = self.proj(attened_x)
+            x = x + self.drop_path(attened_x)
+            x = x + self.drop_path(self.mlp(self.norm2(x)))
 
-            spatial_mlp_windows = self.spatial_mlp(x_windows_heads)  # nW*B, nH*window_size*window_size, C//nH
-            spatial_mlp_windows = spatial_mlp_windows.view(-1, self.num_heads, self.window_size[0] * self.window_size[1]*self.window_size[2],
-                                                        C // self.num_heads).transpose(1, 2)
-            spatial_mlp_windows = spatial_mlp_windows.reshape(-1, self.window_size[0] * self.window_size[1]*self.window_size[2], C)                                          
-            attn_windows = spatial_mlp_windows.reshape(-1, self.window_size[0] ,self.window_size[1],self.window_size[2], C)
+            return x
+   
             
 
 
                             
 
             # merge windows
-            #attn_windows = attn_windows.view(-1, self.window_size, self.window_size, self.window_size, C)
-            shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp)  # B H' W' C
-
-            # reverse cyclic shift
-            if min(self.shift_size) > 0:
-                x = torch.roll(shifted_x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]), dims=(1, 2, 3))
-            else:
-                x = shifted_x
-
-            if pad_r > 0 or pad_b > 0 or pad_g > 0:
-                x = x[:, :S, :H, :W, :].contiguous()
-
-            x = x.view(B, S * H * W, C)
-
-            # FFN
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-
-            return x
-
-
-        elif False:    
-
-            S=14
-            H=W = 40
-            # elif L==5600:
-            #     S=14
-            #     H=W=20
-            # elif L==700:
-            #     S=7
-            #     H=W=10    
-            # else:
-            #     S=3
-            #     H=W=5    
-   
-            assert L == S * H * W, "input feature has wrong size"
-            
-            shortcut = x
-            x = self.norm1(x)
-            x = x.view(B, S, H, W, C)
-
-            # pad feature maps to multiples of window size
-            pad_r = (self.window_size[2] - W % self.window_size[2]) % self.window_size[2]
-            pad_b = (self.window_size[1] - H % self.window_size[1]) % self.window_size[1]
-            pad_g = (self.window_size[0] - S % self.window_size[0]) % self.window_size[0]
-
-            x = F.pad(x, (0, 0, 0, pad_r, 0, pad_b, 0, pad_g))  
-            _, Sp, Hp, Wp, _ = x.shape
-
-            # cyclic shift
-            if min(self.shift_size) > 0:
-                shifted_x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1],-self.shift_size[2]), dims=(1, 2,3))
-                attn_mask = mask_matrix
-            else:
-                shifted_x = x
-                attn_mask = None
-
-            # partition windows
-            x_windows = window_partition(shifted_x, self.window_size)  
-            x_windows = x_windows.view(C, self.window_size[0] * self.window_size[1] * self.window_size[2],
-                                    -1)  
-
-            # W-MSA/SW-MSA
-        
-            attn_windows=self.m(x_windows)
-            # merge windows
-            attn_windows = attn_windows.view(-1, self.window_size[0], self.window_size[1], self.window_size[2], C)
-            shifted_x = window_reverse(attn_windows, self.window_size, Sp, Hp, Wp)  # B H' W' C
-
-            # reverse cyclic shift
-            if min(self.shift_size) > 0:
-                x = torch.roll(shifted_x, shifts=(self.shift_size[0], self.shift_size[1], self.shift_size[2]), dims=(1, 2, 3))
-            else:
-                x = shifted_x
-
-            if pad_r > 0 or pad_b > 0 or pad_g > 0:
-                x = x[:, :S, :H, :W, :].contiguous()
-
-            x = x.view(B, S * H * W, C)
-
-
             
 
-            # FFN
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
-
-
-        elif L==5600:
-            
-            mlp=self.mlp_tokens
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
 
         
-        elif L==700:
-            
-            mlp= self.mlp_tokens_1
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
-
-        else:
-            
-            mlp=self.mlp_tokens_2
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x    
           
         
         
@@ -595,12 +790,13 @@ class PatchMerging(nn.Module):
     def __init__(self, dim, norm_layer=nn.LayerNorm,tag=None):
         super().__init__()
         self.dim = dim
+        
         if tag==0:
             self.reduction = nn.Conv3d(dim,dim*2,kernel_size=[1,3,3],stride=[1,2,2],padding=[0,1,1])
         elif tag==1:
             self.reduction = nn.Conv3d(dim,dim*2,kernel_size=[3,3,3],stride=[2,2,2],padding=[1,1,1])
         else:
-            self.reduction = nn.Conv3d(dim,dim*2,kernel_size=[3,3,3],stride=[2,2,2],padding=[0,1,1])
+            self.reduction = nn.Conv3d(dim,dim*2,kernel_size=[3,3,3],stride=[2,2,2],padding=[1,1,1])
 
         self.norm = norm_layer(dim)
 
@@ -628,7 +824,7 @@ class Patch_Expanding(nn.Module):
         elif tag==1:
             self.up=nn.ConvTranspose3d(dim,dim//2,[2,2,2],[2,2,2]) 
         elif tag==2:
-            self.up=nn.ConvTranspose3d(dim,dim//2,[2,2,2],[2,2,2],output_padding=[1,0,0])            
+            self.up=nn.ConvTranspose3d(dim,dim//2,[1,2,2],[2,2,2],output_padding=[1,0,0])            
     def forward(self, x, S, H, W):
 
         B, L, C = x.shape
@@ -744,7 +940,7 @@ class BasicLayer_up(nn.Module):
         # build blocks
         self.blocks = nn.ModuleList()
         self.blocks.append(
-            SwinTransformerBlock(
+            SwinTransformerBlock_kv(
                     dim=dim,
                     input_resolution=input_resolution,
                     num_heads=num_heads,
@@ -790,11 +986,11 @@ class BasicLayer_up(nn.Module):
         if self.i_layer==1:
             S, H, W = S * 2 , H * 2, W * 2
         elif self.i_layer==0:
-            S, H, W = (S * 2)+1 , H * 2, W * 2
+            S, H, W = S * 2 , H * 2, W * 2
         else:
             S, H, W = S , H * 2, W * 2
         attn_mask=None
-        x = self.blocks[0](x, attn_mask)
+        x = self.blocks[0](x, attn_mask,skip=skip,x_up=x_up)
         for i in range(self.depth-1):
             x = self.blocks[i+1](x,attn_mask)
         
@@ -804,7 +1000,7 @@ class project(nn.Module):
     def __init__(self,in_dim,out_dim,stride,padding,activate,norm,last=False):
         super().__init__()
         self.out_dim=out_dim
-        self.conv1=nn.Conv3d(in_dim,out_dim,kernel_size=3,stride=stride,padding=padding)
+        self.conv1=nn.Conv3d(in_dim,out_dim,kernel_size=4,stride=stride,padding=(3,1,1))
         self.conv2=nn.Conv3d(out_dim,out_dim,kernel_size=3,stride=1,padding=1)
         self.activate=activate()
         self.norm1=norm(out_dim)
@@ -843,7 +1039,7 @@ class PatchEmbed(nn.Module):
 
         self.in_chans = in_chans
         self.embed_dim = embed_dim
-        stride1=[1,patch_size[1]//2,patch_size[2]//2]
+        stride1=[2,patch_size[1]//2,patch_size[2]//2]
         stride2=[1,patch_size[1]//2,patch_size[2]//2]
         self.proj1 = project(in_chans,embed_dim//2,stride1,1,nn.GELU,nn.LayerNorm,False)
         self.proj2 = project(embed_dim//2,embed_dim,stride2,1,nn.GELU,nn.LayerNorm,True)
@@ -1051,7 +1247,7 @@ class Decoder(nn.Module):
 class final_patch_expanding(nn.Module):
     def __init__(self,dim,num_class,patch_size):
         super().__init__()
-        self.up=nn.ConvTranspose3d(dim,num_class,patch_size,patch_size)
+        self.up=nn.ConvTranspose3d(dim,num_class,[3,4,4],patch_size)
       
     def forward(self,x):
         x=x.permute(0,4,1,2,3).contiguous()

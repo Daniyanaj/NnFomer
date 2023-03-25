@@ -52,9 +52,9 @@ class nnFormerTrainerV2_nnformer_acdc(nnFormerTrainer):
         
         self.embedding_dim=96
         self.depths=[2, 2, 2, 2]
-        self.num_heads=[3, 6, 12, 24]
+        self.num_heads=[3, 6, 24, 24]
         self.embedding_patch_size=[1,4,4]
-        self.window_size=[[3,5,5],[3,5,5],[7,10,10],[3,5,5]]
+        self.window_size=[[3,5,5],[3,5,5],[6,10,10],[3,5,5]]
         self.down_stride=[[1,4,4],[1,8,8],[2,16,16],[4,32,32]]
         self.deep_supervision=False
     def initialize(self, training=True, force_load_plans=False):
