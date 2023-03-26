@@ -28,7 +28,7 @@ PLEASE READ paths.md FOR INFORMATION TO HOW TO SET THIS UP
 
 base = '/home/daniya.kareem/nnFormer/DATASET/nnFormer_raw'
 preprocessing_output_dir = '/home/daniya.kareem/nnFormer/DATASET/nnFormer_preprocessed'
-network_training_output_dir_base = '/home/daniya.kareem/Desktop/Results/mlpmixer_enc_correct'
+network_training_output_dir_base = '/home/daniya.kareem/Desktop/Results/mlpmixer17'
 
 if base is not None:
     nnFormer_raw_data = join(base, "nnFormer_raw_data")
