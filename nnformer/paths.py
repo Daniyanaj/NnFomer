@@ -26,9 +26,9 @@ default_cascade_trainer = "nnFormerTrainerV2CascadeFullRes"
 PLEASE READ paths.md FOR INFORMATION TO HOW TO SET THIS UP
 """
 
-base = '/l/users/20020134/nnFormer-main/DATA/nnFormer_raw'
-preprocessing_output_dir = '/l/users/20020134/nnFormer-main/DATA/nnFormer_preprocessed'
-network_training_output_dir_base = '/l/users/20020134/Result_after/nnacdc2'
+base = '/home/daniya.kareem/nnFormer/DATASET/nnFormer_raw/'
+preprocessing_output_dir = '/home/daniya.kareem/nnFormer/DATASET/nnFormer_preprocessed'
+network_training_output_dir_base = '/l/users/20020134/Result_after/cswinshift'
 
 if base is not None:
     nnFormer_raw_data = join(base, "nnFormer_raw_data")

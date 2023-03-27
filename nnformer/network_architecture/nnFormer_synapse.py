@@ -413,7 +413,7 @@ class SwinTransformerBlock(nn.Module):
     def __init__(self, dim, input_resolution, num_heads,
                  window_size=7, mlp_ratio=4., qkv_bias=False, qk_scale=None,
                  drop=0., attn_drop=0., drop_path=0.,
-                 act_layer=nn.GELU, norm_layer=nn.LayerNorm,
+                 act_layer=nn.GELU, norm_layer=nn.LayerNorm, shift_size=0,
                  last_stage=False):
         super().__init__()
         self.dim = dim
@@ -424,11 +424,19 @@ class SwinTransformerBlock(nn.Module):
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.norm1 = norm_layer(dim)
         split_size=window_size
+        self.shift_size=shift_size
+        if min(self.patches_resolution) <= self.split_size:
+            # if window size is larger than input resolution, we don't partition windows
+            self.shift_size = 0
+            #self.window_size = min(self.patches_resolution)
+
+        assert 0 <= self.shift_size < self.split_size, "shift_size must in 0-window_size"
 
         if self.patches_resolution[0] == split_size:
             last_stage = True
         if last_stage:
             self.branch_num = 1
+            self.shift_size=0
         else:
             self.branch_num = 3
         self.proj = nn.Linear(dim, dim)
@@ -454,12 +462,7 @@ class SwinTransformerBlock(nn.Module):
 
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, out_features=dim, act_layer=act_layer, drop=drop)
-        if dim==384:
-            self.mlp_tokens = Mlp(in_features=4096, hidden_features=4096, act_layer=act_layer, drop=drop)
-        elif dim==768:    
-            self.mlp_tokens_1 = Mlp(in_features=512, hidden_features=512, act_layer=act_layer, drop=drop)
-        else:    
-            self.mlp_tokens_2 = Mlp(in_features=64, hidden_features=64, act_layer=act_layer, drop=drop)
+        
         self.norm2 = norm_layer(dim)
 
     def forward(self, x):
@@ -467,59 +470,77 @@ class SwinTransformerBlock(nn.Module):
         x: B, H*W, C
         """
 
-        #H = W = S= self.patches_resolution[0]
+        H = W = S= self.patches_resolution[0]
         B, L, C = x.shape
-        if L==32768:
-            S= H=W = 32
+        shortcut=x
+        if True:
+            #S= H=W = 32
             #B, L, C = x.shape
             assert L == H * W* S, "flatten img_tokens has wrong size"
             img = self.norm1(x)
-            qkv = self.qkv(img).reshape(B, -1, 3, C).permute(2, 0, 1, 3)
+            #qkv = self.qkv(img).reshape(B, -1, 3, C).permute(2, 0, 1, 3)
             
             if self.branch_num == 3:
+                x_img = img.view(B, S, H, W, C)
+                if self.shift_size > 0:
+                    shifted_x = torch.roll(x_img, shifts=(0, -self.shift_size,-self.shift_size), dims=(1, 2,3))
+                else:
+                    shifted_x = x_img
+                    #attn_mask = None
+                x = shifted_x.view(B, S*H* W, C)     
+                qkv = self.qkv(x).reshape(B, -1, 3, C).permute(2, 0, 1, 3)    
                 x1 = self.attns[0](qkv[:,:,:,:C//3])
+                x1 = x1.view(B, S, H, W, C//3)
+                if self.shift_size > 0:
+                    x1 = torch.roll(x1, shifts=(0, self.shift_size, self.shift_size), dims=(1, 2, 3))
+                else:
+                    x1 =x1
+                x1 = x1.view(B, S*H* W, C//3)      
+
+                if self.shift_size>0:
+                    shifted_x = torch.roll(x_img, shifts=( -self.shift_size,0,-self.shift_size), dims=(1, 2,3))
+                else:
+                    shifted_x = x_img
+                    #attn_mask = None
+                x = shifted_x.view(B, S*H* W, C)     
+                qkv = self.qkv(x).reshape(B, -1, 3, C).permute(2, 0, 1, 3)
+
+
                 x2 = self.attns[1](qkv[:,:,:,C//3:2*C//3])
+                x2 = x2.view(B, S, H, W, C//3)
+                if self.shift_size > 0:
+                    x2 = torch.roll(x2, shifts=(self.shift_size, 0, self.shift_size), dims=(1, 2, 3))
+                else:
+                    x2 =x2
+                x2 = x2.view(B, S*H* W, C//3)      
+                if self.shift_size>0:
+                    shifted_x = torch.roll(x_img, shifts=( -self.shift_size,-self.shift_size,0), dims=(1, 2,3))
+                else:
+                    shifted_x = x_img
+                    #attn_mask = None
+                x = shifted_x.view(B, S*H* W, C)     
+                qkv = self.qkv(x).reshape(B, -1, 3, C).permute(2, 0, 1, 3)   
+
                 x3 = self.attns[2](qkv[:,:,:,2*C//3:])
+                x3 = x3.view(B, S, H, W, C//3)
+                if self.shift_size > 0:
+                    x3 = torch.roll(x3, shifts=(self.shift_size, self.shift_size,0), dims=(1, 2, 3))
+                else:
+                    x3 =x3
+                x3 = x3.view(B, S*H* W, C//3)      
+
+
                 attened_x = torch.cat([x1,x2,x3], dim=2)
 
             else:
+                qkv = self.qkv(img).reshape(B, -1, 3, C).permute(2, 0, 1, 3)
                 attened_x = self.attns[0](qkv)
             attened_x = self.proj(attened_x)
-            x = x + self.drop_path(attened_x)
+            x = shortcut + self.drop_path(attened_x)
             x = x + self.drop_path(self.mlp(self.norm2(x)))
 
             return x
-        elif L==4096:
-            mlp=self.mlp_tokens
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
 
-            return x
-
-        
-        elif L==512:
-            
-            mlp= self.mlp_tokens_1
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x
-
-        else:
-            
-            mlp=self.mlp_tokens_2
-            shortcut = x
-            x = self.norm1(x).transpose(1, 2)
-            x= mlp(x).transpose(1, 2)
-            x = shortcut + self.drop_path(x)
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            return x    
           
 
 
@@ -695,7 +716,7 @@ class BasicLayer(nn.Module):
                     input_resolution=input_resolution,
                     num_heads=num_heads,
                     window_size=window_size,
-                    #shift_size=0,
+                    shift_size=0,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_scale=qk_scale,
@@ -710,7 +731,7 @@ class BasicLayer(nn.Module):
                         input_resolution=input_resolution,
                         num_heads=num_heads,
                         window_size=window_size,
-                        
+                        shift_size=window_size // 2,
                         mlp_ratio=mlp_ratio,
                         qkv_bias=qkv_bias,
                         qk_scale=qk_scale,
@@ -814,7 +835,7 @@ class BasicLayer_up(nn.Module):
                     input_resolution=input_resolution,
                     num_heads=num_heads,
                     window_size=window_size,
-                    #shift_size=0,
+                    shift_size=0,
                     mlp_ratio=mlp_ratio,
                     qkv_bias=qkv_bias,
                     qk_scale=qk_scale,
@@ -829,7 +850,7 @@ class BasicLayer_up(nn.Module):
                         input_resolution=input_resolution,
                         num_heads=num_heads,
                         window_size=window_size,
-                        
+                        shift_size=window_size // 2,
                         mlp_ratio=mlp_ratio,
                         qkv_bias=qkv_bias,
                         qk_scale=qk_scale,
